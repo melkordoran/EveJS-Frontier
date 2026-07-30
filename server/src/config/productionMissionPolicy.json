@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "goldenSecurityMissions": [
+    {
+      "missionID": 1182,
+      "dungeonID": 283,
+      "agentLevel": 1,
+      "templateID": "client-dungeon:283",
+      "requiresMissionSetup": false
+    },
+    {
+      "missionID": 2504,
+      "dungeonID": 875,
+      "agentLevel": 1,
+      "templateID": "client-dungeon:875",
+      "requiresMissionSetup": true
+    },
+    {
+      "missionID": 2925,
+      "dungeonID": 1940,
+      "agentLevel": 1,
+      "templateID": "client-dungeon:1940",
+      "requiresMissionSetup": false
+    },
+    {
+      "missionID": 13735,
+      "dungeonID": 3030,
+      "agentLevel": 1,
+      "templateID": "client-dungeon:3030",
+      "requiresMissionSetup": false
+    },
+    {
+      "missionID": 4901,
+      "dungeonID": 2638,
+      "agentLevel": 1,
+      "templateID": "client-dungeon:2638",
+      "requiresMissionSetup": true
+    }
+  ],
+  "disabledMissions": [
+    {
+      "missionID": 4743,
+      "templateIDs": [
+        "eve-survival:NewSlaves1"
+      ]
+    }
+  ],
+  "generatedMissionIDRange": {
+    "minInclusive": 900000000,
+    "maxExclusive": 901000000
+  },
+  "retiredTemplatePrefixes": [
+    "eve-survival:"
+  ]
+}

@@ -1,0 +1,2 @@
+# Runtime-imported alliance logos land here as <allianceID>_<size>.png
+# (via the ConfigEditor). Kept in git so the directory exists for the bind mount.
