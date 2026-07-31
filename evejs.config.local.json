@@ -833,6 +833,12 @@
 
   "projectVersion": "V24.01@ccp",
 
+  // Selects narrowly scoped client-protocol compatibility behavior.
+  // Valid values: "tranquility" or "frontier".
+  // Default: "tranquility".
+
+  "clientCompatibilityProfile": "tranquility",
+
   // UTC daily downtime start used by server-side startup reconciliation.
   // Matches the target client's zcluster DowntimeStarts value format and falls back to 11:00:00 when unset.
   // Valid values: UTC time in "HH:MM:SS" format.

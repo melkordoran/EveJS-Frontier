@@ -1,5 +1,11 @@
 {
-  "scripts": {},
+  "scripts": {
+    "frontier:extract": "node tools/frontier-static/extract-frontier-static.mjs",
+    "frontier:database": "node tools/frontier-static/build-frontier-database.mjs",
+    "frontier:validate": "node tools/frontier-static/validate-frontier-static.mjs",
+    "test:frontier-static": "node --test tools/frontier-static/test/*.test.mjs",
+    "test:frontier-server": "node --test server/tests/frontierHandshakeProfile.test.js"
+  },
   "dependencies": {
     "node-forge": "^1.3.1",
     "yaml": "^2.8.3"

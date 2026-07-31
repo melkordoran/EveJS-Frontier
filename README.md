@@ -4,6 +4,17 @@ EVE.js is a local EVE Online server emulator. This release targets **EVE 24.01 b
 
 Join the project Discord: [https://discord.gg/KMuJrMDEBa](https://discord.gg/KMuJrMDEBa)
 
+## EVE Frontier compatibility fork
+
+This checkout contains an experimental, isolated compatibility profile for EVE
+Frontier build `3450341`. It extracts static data only from the locally
+installed client, stages a separate client copy, and leaves the retail client
+and normal EveJS installation untouched.
+
+Milestone one reaches authenticated MachoNet session creation on game TCP port
+`26000`. Setup, verification results, and the next protocol boundary are in
+[the milestone-one record](doc/FRONTIER_MILESTONE_1.md).
+
 ## Localhost only
 
 > **EVE.js is a localhost-only project. Run the server and EVE client on the same computer.** It is not hardened for a LAN, the public Internet, port forwarding, shared hosting, or untrusted users.

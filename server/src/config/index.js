@@ -1256,6 +1256,8 @@ const CONFIG_ENTRY_DEFINITIONS = [
   {
     key: "clientVersion",
     defaultValue: 24.01,
+    envVar: "EVEJS_CLIENT_VERSION",
+    envType: "number",
     description:
       "Boot version reported to the client during the login handshake.",
     validValues: 'Number matching your client build, for example 24.01.',
@@ -1263,6 +1265,8 @@ const CONFIG_ENTRY_DEFINITIONS = [
   {
     key: "clientBuild",
     defaultValue: 3396210,
+    envVar: "EVEJS_CLIENT_BUILD",
+    envType: "number",
     description:
       "Client build number reported to the client during the login handshake.",
     validValues: "Integer build number matching your client.",
@@ -1270,6 +1274,8 @@ const CONFIG_ENTRY_DEFINITIONS = [
   {
     key: "eveBirthday",
     defaultValue: 170472,
+    envVar: "EVEJS_EVE_BIRTHDAY",
+    envType: "number",
     description:
       "Birthday value used by the handshake version checks.",
     validValues: "Integer matching your client build.",
@@ -1277,6 +1283,8 @@ const CONFIG_ENTRY_DEFINITIONS = [
   {
     key: "machoVersion",
     defaultValue: 496,
+    envVar: "EVEJS_MACHO_VERSION",
+    envType: "number",
     description:
       "MachoNet protocol version reported during session bootstrap.",
     validValues: "Integer matching your client build.",
@@ -1284,6 +1292,8 @@ const CONFIG_ENTRY_DEFINITIONS = [
   {
     key: "projectCodename",
     defaultValue: "EvEJS",
+    envVar: "EVEJS_PROJECT_CODENAME",
+    envType: "string",
     defaultComment: "client compatibility codename",
     description:
       "Project codename reported to the client during startup.",
@@ -1293,6 +1303,8 @@ const CONFIG_ENTRY_DEFINITIONS = [
   {
     key: "projectRegion",
     defaultValue: "ccp",
+    envVar: "EVEJS_PROJECT_REGION",
+    envType: "string",
     description:
       "Project region reported to the client during startup.",
     validValues: 'String. For the current client keep this as "ccp".',
@@ -1300,10 +1312,22 @@ const CONFIG_ENTRY_DEFINITIONS = [
   {
     key: "projectVersion",
     defaultValue: "V24.01@ccp",
+    envVar: "EVEJS_PROJECT_VERSION",
+    envType: "string",
     description:
       "Full project version string reported to the client during startup.",
     validValues:
       'String matching your client boot version, for example "V24.01@ccp".',
+  },
+  {
+    key: "clientCompatibilityProfile",
+    defaultValue: "tranquility",
+    envVar: "EVEJS_CLIENT_COMPATIBILITY_PROFILE",
+    envType: "string",
+    allowedValues: ["tranquility", "frontier"],
+    description:
+      "Selects narrowly scoped client-protocol compatibility behavior.",
+    validValues: '"tranquility" or "frontier".',
   },
   {
     key: "clusterDowntimeStarts",

@@ -101,10 +101,12 @@ const DBTYPE = {
  *   string                   → PyStringTableItem / PyLongString (UTF-8)
  *   Buffer                   → PyBuffer
  *   { type: 'bytes', value: Buffer|Uint8Array } → PyString/PyLongString raw bytes
+ *   { type: 'frontier-bytes', value: Buffer }   → Frontier Python 3 bytes
  *   { type: 'rawstr', value: '...' }            → PyString/PyLongString UTF-8, bypass string table
  *   Array                    → PyTuple
  *   { type: 'dict', entries: [[k,v], ...] }  → PyDict
  *   { type: 'wstring', value: '...' }        → PyWStringUTF8
+ *   { type: 'frontier-string', value: '...' } → Frontier Python 3 text
  *   { type: 'long', value: BigInt|number }   → PyLongLong
  *   { type: 'real', value: number }          → PyReal
  *   { type: 'list', items: [...] }           → PyList
@@ -112,8 +114,13 @@ const DBTYPE = {
  *   { type: 'substruct', value: ... }        → PySubStruct
  *   { type: 'substream', value: ... }        → PySubStream
  */
-function marshalEncode(value) {
+function marshalEncode(value, options = {}) {
   const chunks = [];
+  const context = {
+    frontierText:
+      String(options.compatibilityProfile || "").trim().toLowerCase() ===
+      "frontier",
+  };
 
   // Stream header
   chunks.push(Buffer.from([MARSHAL_HEADER]));
@@ -123,7 +130,7 @@ function marshalEncode(value) {
   chunks.push(mc);
 
   // Encode the root value
-  encodeValue(value, chunks);
+  encodeValue(value, chunks, context);
 
   return Buffer.concat(chunks);
 }
@@ -139,7 +146,7 @@ function putSizeEx(size, chunks) {
   }
 }
 
-function encodeValue(value, chunks) {
+function encodeValue(value, chunks, context = {}) {
   // null / undefined → PyNone
   if (value === null || value === undefined) {
     chunks.push(Buffer.from([Op.PyNone]));
@@ -181,21 +188,10 @@ function encodeValue(value, chunks) {
 
   // String → try string table first, then PyLongString
   if (typeof value === "string") {
-    const strBuf = Buffer.from(value, "utf8");
-    if (strBuf.length === 0) {
-      chunks.push(Buffer.from([Op.PyEmptyString]));
-    } else if (strBuf.length === 1) {
-      chunks.push(Buffer.from([Op.PyCharString, strBuf[0]]));
+    if (context.frontierText) {
+      encodeFrontierString(value, chunks);
     } else {
-      // Check string table for efficient encoding
-      const tableIdx = lookupIndex(value);
-      if (tableIdx > STRING_TABLE_ERROR) {
-        chunks.push(Buffer.from([Op.PyStringTableItem, tableIdx]));
-      } else {
-        chunks.push(Buffer.from([Op.PyLongString]));
-        putSizeEx(strBuf.length, chunks);
-        chunks.push(strBuf);
-      }
+      encodeLegacyString(value, chunks);
     }
     return;
   }
@@ -210,7 +206,7 @@ function encodeValue(value, chunks) {
 
   // Array → PyTuple
   if (Array.isArray(value)) {
-    encodeTuple(value, chunks);
+    encodeTuple(value, chunks, context);
     return;
   }
 
@@ -218,10 +214,13 @@ function encodeValue(value, chunks) {
   if (typeof value === "object" && value.type) {
     switch (value.type) {
       case "dict":
-        encodeDict(value.entries, chunks);
+        encodeDict(value.entries, chunks, context);
         return;
       case "wstring":
         encodeWString(value.value, chunks);
+        return;
+      case "frontier-string":
+        encodeFrontierString(value.value, chunks);
         return;
       case "long":
         encodeLong(value.value, chunks);
@@ -239,10 +238,14 @@ function encodeValue(value, chunks) {
         return;
       }
       case "tuple":
-        encodeTuple(Array.isArray(value.items) ? value.items : [], chunks);
+        encodeTuple(
+          Array.isArray(value.items) ? value.items : [],
+          chunks,
+          context,
+        );
         return;
       case "list":
-        encodeList(value.items, chunks);
+        encodeList(value.items, chunks, context);
         return;
       case "bytes": {
         const rawBytes = Buffer.isBuffer(value.value)
@@ -268,6 +271,15 @@ function encodeValue(value, chunks) {
         }
         return;
       }
+      case "frontier-bytes": {
+        const rawBytes = Buffer.isBuffer(value.value)
+          ? value.value
+          : Buffer.from(value.value || []);
+        chunks.push(Buffer.from([Op.PyLongString]));
+        putSizeEx(rawBytes.length, chunks);
+        chunks.push(rawBytes);
+        return;
+      }
       case "rawstr": {
         const rawStringBytes = Buffer.from(String(value.value ?? ""), "utf8");
         if (rawStringBytes.length === 0) {
@@ -291,14 +303,14 @@ function encodeValue(value, chunks) {
         return;
       }
       case "object":
-        encodeObject(value, chunks);
+        encodeObject(value, chunks, context);
         return;
       case "packedrow":
-        encodePackedRow(value, chunks);
+        encodePackedRow(value, chunks, context);
         return;
       case "substruct":
         chunks.push(Buffer.from([Op.PySubStruct]));
-        encodeValue(value.value, chunks);
+        encodeValue(value.value, chunks, context);
         return;
       case "substream": {
         chunks.push(Buffer.from([Op.PySubStream]));
@@ -308,7 +320,7 @@ function encodeValue(value, chunks) {
         const mc2 = Buffer.alloc(4);
         mc2.writeUInt32LE(0, 0);
         innerChunks.push(mc2);
-        encodeValue(value.value, innerChunks);
+        encodeValue(value.value, innerChunks, context);
         const innerBuf = Buffer.concat(innerChunks);
         putSizeEx(innerBuf.length, chunks);
         chunks.push(innerBuf);
@@ -328,19 +340,19 @@ function encodeValue(value, chunks) {
             value.type === "objectex1" ? Op.PyObjectEx1 : Op.PyObjectEx2,
           ]),
         );
-        encodeValue(value.header, chunks);
+        encodeValue(value.header, chunks, context);
         // Encode list elements
         if (value.list) {
           for (const item of value.list) {
-            encodeValue(item, chunks);
+            encodeValue(item, chunks, context);
           }
         }
         chunks.push(Buffer.from([Op.PackedTerminator]));
         // Encode dict elements
         if (value.dict) {
           for (const [key, val] of value.dict) {
-            encodeValue(key, chunks);
-            encodeValue(val, chunks);
+            encodeValue(key, chunks, context);
+            encodeValue(val, chunks, context);
           }
         }
         chunks.push(Buffer.from([Op.PackedTerminator]));
@@ -407,7 +419,7 @@ function encodeLong(val, chunks) {
   chunks.push(buf);
 }
 
-function encodeTuple(arr, chunks) {
+function encodeTuple(arr, chunks, context) {
   if (arr.length === 0) {
     chunks.push(Buffer.from([Op.PyEmptyTuple]));
   } else if (arr.length === 1) {
@@ -419,32 +431,50 @@ function encodeTuple(arr, chunks) {
     putSizeEx(arr.length, chunks);
   }
   for (const item of arr) {
-    encodeValue(item, chunks);
+    encodeValue(item, chunks, context);
   }
 }
 
-function encodeList(arr, chunks) {
+function encodeList(arr, chunks, context) {
   if (!arr || arr.length === 0) {
     chunks.push(Buffer.from([Op.PyEmptyList]));
   } else if (arr.length === 1) {
     chunks.push(Buffer.from([Op.PyOneList]));
-    encodeValue(arr[0], chunks);
+    encodeValue(arr[0], chunks, context);
   } else {
     chunks.push(Buffer.from([Op.PyList]));
     putSizeEx(arr.length, chunks);
     for (const item of arr) {
-      encodeValue(item, chunks);
+      encodeValue(item, chunks, context);
     }
   }
 }
 
-function encodeDict(entries, chunks) {
+function encodeDict(entries, chunks, context) {
   chunks.push(Buffer.from([Op.PyDict]));
   putSizeEx(entries.length, chunks);
   // EVE marshal writes VALUE first, then KEY (reversed from what you'd expect)
   for (const [key, val] of entries) {
-    encodeValue(val, chunks);
-    encodeValue(key, chunks);
+    encodeValue(val, chunks, context);
+    encodeValue(key, chunks, context);
+  }
+}
+
+function encodeLegacyString(str, chunks) {
+  const strBuf = Buffer.from(str, "utf8");
+  if (strBuf.length === 0) {
+    chunks.push(Buffer.from([Op.PyEmptyString]));
+  } else if (strBuf.length === 1) {
+    chunks.push(Buffer.from([Op.PyCharString, strBuf[0]]));
+  } else {
+    const tableIdx = lookupIndex(str);
+    if (tableIdx > STRING_TABLE_ERROR) {
+      chunks.push(Buffer.from([Op.PyStringTableItem, tableIdx]));
+    } else {
+      chunks.push(Buffer.from([Op.PyLongString]));
+      putSizeEx(strBuf.length, chunks);
+      chunks.push(strBuf);
+    }
   }
 }
 
@@ -459,15 +489,26 @@ function encodeWString(str, chunks) {
   chunks.push(strBuf);
 }
 
-function encodeObject(obj, chunks) {
+function encodeFrontierString(str, chunks) {
+  if (!str || str.length === 0) {
+    chunks.push(Buffer.from([Op.PyEmptyWString]));
+    return;
+  }
+  const strBuf = Buffer.from(str, "utf8");
+  chunks.push(Buffer.from([Op.PyWStringUCS2]));
+  putSizeEx(strBuf.length, chunks);
+  chunks.push(strBuf);
+}
+
+function encodeObject(obj, chunks, context) {
   // PyObject = Op_PyObject + type_name_as_string + args
   // In C++ EVEmu, the type name (PyToken) is encoded as a regular string
   // through the visitor pattern — NOT as Op.PyToken (0x02).
   chunks.push(Buffer.from([Op.PyObject]));
   // Encode type name as a regular string (will use string table if available)
-  encodeValue(obj.name, chunks);
+  encodeLegacyString(obj.name, chunks);
   // Args
-  encodeValue(obj.args, chunks);
+  encodeValue(obj.args, chunks, context);
 }
 
 function getDbTypeSizeBits(type) {
@@ -1048,12 +1089,12 @@ function decodePackedRowFields(rowHeader, rleData, state) {
   };
 }
 
-function encodePackedRow(packedRow, chunks) {
+function encodePackedRow(packedRow, chunks, context) {
   const columns = normalizePackedRowColumns(packedRow);
   const values = normalizePackedRowValueMap(packedRow, columns);
 
   chunks.push(Buffer.from([Op.PyPackedRow]));
-  encodeValue(packedRow.header, chunks);
+  encodeValue(packedRow.header, chunks, context);
 
   const sizeMap = [];
   const booleanColumns = new Map();
@@ -1126,7 +1167,7 @@ function encodePackedRow(packedRow, chunks) {
     if (entry.size !== 0) {
       continue;
     }
-    encodeValue(values[entry.index], chunks);
+    encodeValue(values[entry.index], chunks, context);
   }
 }
 
@@ -1139,7 +1180,7 @@ function encodePackedRow(packedRow, chunks) {
  * The input should be the raw payload AFTER stripping the 4-byte length header,
  * starting with the 0x7E magic byte.
  */
-function decodeMarshalStream(buffer, requireExactEnd) {
+function decodeMarshalStream(buffer, requireExactEnd, options = {}) {
   if (!Buffer.isBuffer(buffer)) {
     buffer = Buffer.from(buffer, "hex");
   }
@@ -1150,6 +1191,9 @@ function decodeMarshalStream(buffer, requireExactEnd) {
     storedObjects: [],
     saveIndicesPos: null,
     saveIndicesEnd: null,
+    compatibilityProfile: String(options.compatibilityProfile || "")
+      .trim()
+      .toLowerCase(),
   };
 
   // Read and verify header
@@ -1195,12 +1239,12 @@ function decodeMarshalStream(buffer, requireExactEnd) {
   return value;
 }
 
-function marshalDecode(buffer) {
-  return decodeMarshalStream(buffer, false);
+function marshalDecode(buffer, options = {}) {
+  return decodeMarshalStream(buffer, false, options);
 }
 
-function marshalDecodeExact(buffer) {
-  return decodeMarshalStream(buffer, true);
+function marshalDecodeExact(buffer, options = {}) {
+  return decodeMarshalStream(buffer, true, options);
 }
 
 function readUInt8(state) {
@@ -1425,9 +1469,12 @@ function decodeValue(state) {
       break;
 
     case Op.PyWStringUCS2: {
-      const byteLen = readSizeEx(state);
-      const data = readBytes(state, byteLen * 2);
-      result = { type: "wstring", value: data.toString("utf16le") };
+      const encodedLen = readSizeEx(state);
+      const isFrontier = state.compatibilityProfile === "frontier";
+      const data = readBytes(state, isFrontier ? encodedLen : encodedLen * 2);
+      result = isFrontier
+        ? data.toString("utf8")
+        : { type: "wstring", value: data.toString("utf16le") };
       break;
     }
 
@@ -1554,7 +1601,12 @@ function decodeValue(state) {
       const data = readBytes(state, len);
       // Try to decode the substream
       try {
-        result = { type: "substream", value: marshalDecode(data) };
+        result = {
+          type: "substream",
+          value: marshalDecode(data, {
+            compatibilityProfile: state.compatibilityProfile,
+          }),
+        };
       } catch (e) {
         result = { type: "substream", raw: data };
       }

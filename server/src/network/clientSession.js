@@ -20,6 +20,10 @@ const serviceCallShapeCapture = require(path.join(
 const { marshalEncode, marshalDecode, encodePacket } = require(
   path.join(__dirname, "./tcp/utils/marshal"),
 );
+const { framePayload } = require(path.join(
+  __dirname,
+  "./tcp/packetFraming",
+));
 const { MACHONETMSG_TYPE } = require(
   path.join(__dirname, "../common/packetTypes"),
 );
@@ -330,6 +334,8 @@ class ClientSession {
     this.sessionIV = options.sessionIV || null;
     this._encryptFn = options.encryptFn || null;
     this._decryptFn = options.decryptFn || null;
+    this.compatibilityProfile =
+      options.compatibilityProfile || config.clientCompatibilityProfile;
 
     // Timestamps
     this.connectTime = Date.now();
@@ -365,7 +371,9 @@ class ClientSession {
 
     // Marshal the value
     const encodeStartedAtMs = Date.now();
-    const marshaled = marshalEncode(value);
+    const marshaled = marshalEncode(value, {
+      compatibilityProfile: this.compatibilityProfile,
+    });
     const encodeElapsedMs = Date.now() - encodeStartedAtMs;
     serviceCallShapeCapture.capturePacketShape({
       direction: "outbound",
@@ -491,9 +499,7 @@ class ClientSession {
     if (this.encrypted && this._encryptFn) {
       // Encrypt, then frame
       const encrypted = this._encryptFn(payload);
-      const header = Buffer.alloc(4);
-      header.writeUInt32LE(encrypted.length, 0);
-      const framed = Buffer.concat([header, encrypted]);
+      const framed = framePayload(encrypted, this.compatibilityProfile);
       return {
         bodyBytes: encrypted.length,
         framedBytes: framed.length,
@@ -501,9 +507,7 @@ class ClientSession {
       };
     } else {
       // Frame without encryption
-      const header = Buffer.alloc(4);
-      header.writeUInt32LE(payload.length, 0);
-      const framed = Buffer.concat([header, payload]);
+      const framed = framePayload(payload, this.compatibilityProfile);
       return {
         bodyBytes: payload.length,
         framedBytes: framed.length,
@@ -686,7 +690,9 @@ class ClientSession {
     // before the [1, args] call tuple.
     const unpickledPayload = [0, [1, payloadTuple]];
     const innerMarshalStartedAtMs = Date.now();
-    const marshalledPayload = marshalEncode(unpickledPayload);
+    const marshalledPayload = marshalEncode(unpickledPayload, {
+      compatibilityProfile: this.compatibilityProfile,
+    });
     const innerMarshalElapsedMs = Date.now() - innerMarshalStartedAtMs;
 
     const responseTuple = [
@@ -780,7 +786,9 @@ class ClientSession {
       ? [1, methodName, payloadTuple, kwargs]
       : [1, methodName, payloadTuple];
     const innerMarshalStartedAtMs = Date.now();
-    const marshalledPayload = marshalEncode(unpickledPayload);
+    const marshalledPayload = marshalEncode(unpickledPayload, {
+      compatibilityProfile: this.compatibilityProfile,
+    });
     const innerMarshalElapsedMs = Date.now() - innerMarshalStartedAtMs;
 
     const responseTuple = [
@@ -999,7 +1007,9 @@ class ClientSession {
     const objectPayload = kwargs
       ? [objectID, methodName, payloadTuple, kwargs]
       : [objectID, methodName, payloadTuple];
-    const marshalledObjectPayload = marshalEncode(objectPayload);
+    const marshalledObjectPayload = marshalEncode(objectPayload, {
+      compatibilityProfile: this.compatibilityProfile,
+    });
     const objectRegistrationRefID = resolveBoundObjectRegistrationRefID(
       this,
       objectID,

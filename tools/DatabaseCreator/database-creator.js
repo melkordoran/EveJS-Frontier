@@ -33,6 +33,8 @@ const {
 const DEFAULT_BUILD = 3396210;
 const DEFAULT_SDE_URL =
   "https://developers.eveonline.com/static-data/tranquility/eve-online-static-data-3396210-jsonl.zip";
+const DEFAULT_PROFILE = "tranquility";
+const DATABASE_PROFILES = new Set(["tranquility", "frontier"]);
 const STATIC_TABLE_ROOT = path.join(__dirname, "staticTables");
 const PRESERVED_STATIC_AUTHORITY_TABLES = new Set([
   "agentAuthority",
@@ -468,6 +470,7 @@ function parseArgs(argv = process.argv.slice(2)) {
     outDir: "",
     build: DEFAULT_BUILD,
     sdeUrl: DEFAULT_SDE_URL,
+    profile: DEFAULT_PROFILE,
     force: false,
   };
 
@@ -481,6 +484,8 @@ function parseArgs(argv = process.argv.slice(2)) {
       options.build = Number(argv[++index]);
     } else if (arg === "--sde-url") {
       options.sdeUrl = String(argv[++index] || "");
+    } else if (arg === "--profile") {
+      options.profile = String(argv[++index] || "").trim().toLowerCase();
     } else if (arg === "--force") {
       options.force = true;
     } else if (arg === "--help" || arg === "-h") {
@@ -489,13 +494,25 @@ function parseArgs(argv = process.argv.slice(2)) {
       throw new Error(`Unknown argument: ${arg}`);
     }
   }
+  if (!DATABASE_PROFILES.has(options.profile)) {
+    throw new Error(
+      `Invalid database profile: ${options.profile || "(missing)"} ` +
+      `(expected ${[...DATABASE_PROFILES].join(" or ")})`,
+    );
+  }
   return options;
 }
 
 function usage() {
   return [
     "Usage:",
-    "  node tools/DatabaseCreator/database-creator.js --sde-dir <jsonl-dir> --out <data-dir> [--force]",
+    "  node tools/DatabaseCreator/database-creator.js --sde-dir <jsonl-dir> --out <data-dir> [options]",
+    "",
+    "Options:",
+    "  --build <number>",
+    "  --sde-url <url>",
+    "  --profile <tranquility|frontier>",
+    "  --force",
   ].join("\n");
 }
 
@@ -702,10 +719,16 @@ async function readJsonlRecords(sdeDir, fileName, onRecord) {
 }
 
 function buildSource(options, sdeMeta = {}) {
+  const frontier = options.profile === "frontier";
   return {
-    provider: "CCP public static-data JSONL",
-    authority: `eve-online-static-data-${options.build}-jsonl`,
+    provider: frontier
+      ? "EVE Frontier installed client cache"
+      : "CCP public static-data JSONL",
+    authority: frontier
+      ? `eve-frontier-client-static-${options.build}`
+      : `eve-online-static-data-${options.build}-jsonl`,
     buildNumber: options.build,
+    profile: options.profile,
     sdeUrl: options.sdeUrl,
     releaseDate: sdeMeta.releaseDate || null,
     generatedAt: new Date().toISOString(),
@@ -1833,13 +1856,15 @@ function buildShipCosmeticsCatalog(authority, options) {
     sortedShipTypesByTypeID[String(key)] = shipTypesByTypeID[String(key)];
   }
 
+  const source = buildSource(options, authority.sdeMeta);
   return {
     meta: {
-      provider: "CCP public static-data JSONL",
+      provider: source.provider,
       generatedAt: new Date().toISOString(),
-      description: "Ship cosmetics catalog generated from public EVE Static Data JSONL.",
-      authority: `eve-online-static-data-${options.build}-jsonl`,
+      description: `Ship cosmetics catalog generated from ${source.provider}.`,
+      authority: source.authority,
       buildNumber: options.build,
+      profile: options.profile,
       releaseDate: authority.sdeMeta.releaseDate || null,
       sourceFiles: ["skins.jsonl", "skinMaterials.jsonl", "skinLicenses.jsonl", "types.jsonl", "groups.jsonl"],
       publicSdeLimitations: [
@@ -2281,8 +2306,8 @@ function buildCharacter(characterID, accountId, characterName, options = {}) {
     description: "Local EvEJS bootstrap character",
     aurBalance: 0,
     skillPoints: 0,
-    shipTypeID: 670,
-    shipName: "Capsule",
+    shipTypeID: options.shipTypeID || 670,
+    shipName: options.shipName || "Capsule",
     shipID: characterID + 1000000000000,
     bounty: 0,
     skillQueueEndTime: 0,
@@ -2353,7 +2378,74 @@ function buildCharacter(characterID, accountId, characterName, options = {}) {
   };
 }
 
-function buildLocalAccountsAndCharacters() {
+function resolveBootstrapProfile(authority, options) {
+  if (options.profile !== "frontier") {
+    return {
+      bloodlineID: 8,
+      constellationID: 20000020,
+      corporationID: 1000044,
+      factionID: 500001,
+      raceID: 2,
+      regionID: 10000002,
+      schoolID: 33,
+      shipName: "Capsule",
+      shipTypeID: 670,
+      solarSystemID: 30000142,
+      stationID: 60003760,
+    };
+  }
+
+  const station = [...authority.stations]
+    .sort((left, right) => left.stationID - right.stationID)[0];
+  if (!station) {
+    throw new Error("Frontier database profile requires at least one NPC station");
+  }
+  const system = authority.solarSystems.find(
+    (entry) => entry.solarSystemID === station.solarSystemID,
+  );
+  if (!system) {
+    throw new Error(
+      `Frontier bootstrap station ${station.stationID} references unknown system ` +
+      `${station.solarSystemID}`,
+    );
+  }
+
+  const playableRace = authority.races
+    .filter((row) => row.shipTypeID != null)
+    .sort((left, right) => toInt(left._key) - toInt(right._key))[0] || {};
+  const raceID = toInt(playableRace._key, 1);
+  const bloodline = authority.bloodlines
+    .filter((row) => toInt(row.raceID) === raceID)
+    .sort((left, right) => toInt(left._key) - toInt(right._key))[0] || {};
+
+  return {
+    bloodlineID: toInt(bloodline._key, 1),
+    constellationID: system.constellationID,
+    corporationID: station.corporationID || 1000001,
+    factionID: system.factionID || 0,
+    raceID,
+    regionID: system.regionID,
+    schoolID: 0,
+    shipName: itemName(authority.typeByID, 670, "Capsule"),
+    shipTypeID: 670,
+    solarSystemID: system.solarSystemID,
+    stationID: station.stationID,
+  };
+}
+
+function buildLocalAccountsAndCharacters(bootstrap, profile = DEFAULT_PROFILE) {
+  const defaultCharacter = { ...bootstrap };
+  const gmCharacter = profile === "frontier"
+    ? { ...bootstrap }
+    : {
+        ...bootstrap,
+        raceID: 1,
+        bloodlineID: 1,
+        ancestryID: 1,
+        corporationID: 1000006,
+        schoolID: 35,
+        factionID: 500004,
+      };
   return {
     accounts: {
       test: {
@@ -2380,17 +2472,10 @@ function buildLocalAccountsAndCharacters() {
       },
     },
     characters: {
-      140000001: buildCharacter(140000001, 1, "Test Pilot"),
-      140000002: buildCharacter(140000002, 2, "Test Two"),
-      140000003: buildCharacter(140000003, 2, "Test Three"),
-      140000004: buildCharacter(140000004, 2, "GM Elysian", {
-        raceID: 1,
-        bloodlineID: 1,
-        ancestryID: 1,
-        corporationID: 1000006,
-        schoolID: 35,
-        factionID: 500004,
-      }),
+      140000001: buildCharacter(140000001, 1, "Test Pilot", defaultCharacter),
+      140000002: buildCharacter(140000002, 2, "Test Two", defaultCharacter),
+      140000003: buildCharacter(140000003, 2, "Test Three", defaultCharacter),
+      140000004: buildCharacter(140000004, 2, "GM Elysian", gmCharacter),
     },
     identityState: {
       version: 1,
@@ -2401,9 +2486,9 @@ function buildLocalAccountsAndCharacters() {
   };
 }
 
-function buildLocalItems(typeByID) {
+function buildLocalItems(typeByID, bootstrap = {}) {
   const gmId = 140000004;
-  const stationID = 60003760;
+  const stationID = bootstrap.stationID || 60003760;
   const items = {};
   const entries = [
     { itemID: 9988400000001, ownerID: 140000001, typeID: 670, quantity: -1, singleton: 1, name: "Capsule" },
@@ -2797,6 +2882,31 @@ async function loadSdeAuthority(sdeDir) {
       celestialIndex: optionalInt(row.celestialIndex),
       orbitIndex,
       kind: "moon",
+    });
+  });
+  await readJsonlRecords(sdeDir, "mapLagrangePoints.jsonl", (row) => {
+    const system = solarSystemByID.get(toInt(row.solarSystemID)) || {};
+    const type = typeByID.get(toInt(row.typeID)) || {};
+    const itemID = toInt(row._key);
+    celestials.push({
+      itemID,
+      typeID: toInt(row.typeID),
+      groupID: type.groupID || toInt(row.groupID, 4870),
+      categoryID: type.categoryID || 2,
+      groupName: type.groupName || "Lagrange Point",
+      solarSystemID: toInt(row.solarSystemID),
+      constellationID: system.constellationID || 0,
+      regionID: system.regionID || 0,
+      orbitID: toInt(row.orbitID, 0) || null,
+      position: cloneVector(row.position),
+      radius: row.radius == null
+        ? toNumber(type.radius, 0)
+        : toNumber(row.radius, toNumber(type.radius, 0)),
+      itemName: itemName(typeByID, row.typeID, `Lagrange Point ${itemID}`),
+      security: system.security || 0,
+      celestialIndex: optionalInt(row.celestialIndex),
+      orbitIndex: optionalInt(row.orbitIndex),
+      kind: "lagrangePoint",
     });
   });
   await readJsonlRecords(sdeDir, "mapAsteroidBelts.jsonl", (row) => {
@@ -3329,11 +3439,12 @@ async function createDatabase(options) {
 
   const authority = await loadSdeAuthority(options.sdeDir);
   const tables = buildTables(authority, options);
-  const local = buildLocalAccountsAndCharacters();
+  const bootstrap = resolveBootstrapProfile(authority, options);
+  const local = buildLocalAccountsAndCharacters(bootstrap, options.profile);
   tables.accounts = local.accounts;
   tables.characters = local.characters;
   tables.identityState = local.identityState;
-  tables.items = buildLocalItems(authority.typeByID);
+  tables.items = buildLocalItems(authority.typeByID, bootstrap);
   tables.skills = {
     140000001: {},
     140000002: {},
@@ -3382,10 +3493,12 @@ async function createDatabase(options) {
     version: 1,
     generatedAt: new Date().toISOString(),
     build: options.build,
+    profile: options.profile,
     sdeUrl: options.sdeUrl,
     sdeMeta: authority.sdeMeta,
     sdeSha256: sha256File(sdeMetaPath),
     outputDataDir: options.outDir,
+    bootstrap,
     generatedTables,
     staticTables,
     placeholderTables,
@@ -3434,6 +3547,8 @@ if (require.main === module) {
 module.exports = {
   DEFAULT_BUILD,
   DEFAULT_SDE_URL,
+  DEFAULT_PROFILE,
+  DATABASE_PROFILES,
   REQUIRED_TABLES,
   GENERATED_TABLES,
   STATION_ROTATION_OVERRIDES,
@@ -3445,5 +3560,6 @@ module.exports = {
   stationLocatorProfileByTypeID,
   buildCorporations,
   buildLocalAccountsAndCharacters,
+  resolveBootstrapProfile,
   sanitizeAndValidateProductionMissionPolicy,
 };

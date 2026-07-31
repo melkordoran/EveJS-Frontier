@@ -10,6 +10,10 @@ const log = require(path.join(__dirname, "../../utils/logger"));
 const config = require(path.join(__dirname, "../../config"));
 const EVEHandshake = require(path.join(__dirname, "./handshake"));
 const { marshalDecode } = require(path.join(__dirname, "./utils/marshal"));
+const { readPacketLength } = require(path.join(
+  __dirname,
+  "./packetFraming",
+));
 const ClientSession = require(path.join(__dirname, "../clientSession"));
 const PacketDispatcher = require(path.join(__dirname, "../packetDispatcher"));
 const { configureClientSocket } = require(path.join(__dirname, "./socketTuning"));
@@ -213,9 +217,12 @@ module.exports = function (serviceManager) {
       socket.on("data", (chunk) => {
         tcpBuffer = Buffer.concat([tcpBuffer, chunk]);
 
-        // Frame-level parsing: packets are [4-byte LE length] [payload]
+        // Frame-level parsing: packet length byte order is client-profile specific.
         while (tcpBuffer.length >= 4) {
-          const payloadLength = tcpBuffer.readUInt32LE(0);
+          const payloadLength = readPacketLength(
+            tcpBuffer,
+            config.clientCompatibilityProfile,
+          );
 
           // Sanity check
           if (payloadLength <= 0 || payloadLength > 10_000_000) {
@@ -268,6 +275,7 @@ module.exports = function (serviceManager) {
                     decryptFn: handshake.encrypted
                       ? (data) => handshake._decrypt(data)
                       : null,
+                    compatibilityProfile: config.clientCompatibilityProfile,
                   },
                 );
 
@@ -300,7 +308,9 @@ module.exports = function (serviceManager) {
               }
 
               // Unmarshal the packet
-              const decoded = marshalDecode(data);
+              const decoded = marshalDecode(data, {
+                compatibilityProfile: config.clientCompatibilityProfile,
+              });
 
               if (log.isPacketPayloadDebugEnabled()) {
                 if (decoded && decoded.type === "object" && decoded.args) {

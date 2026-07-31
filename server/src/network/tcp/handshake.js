@@ -23,14 +23,14 @@ const rotatingLog = require(path.join(__dirname, "../../utils/rotatingLog"));
 const log = require(path.join(__dirname, "../../utils/logger"));
 const config = require(path.join(__dirname, "../../config"));
 const {
-  marshalEncode, // unused
+  marshalEncode,
   marshalDecode,
   wrapPacket,    // unused
-  encodePacket,
   dictGet,
   strVal,
   bufVal,
 } = require(path.join(__dirname, "./utils/marshal"));
+const { framePayload } = require(path.join(__dirname, "./packetFraming"));
 
 // Phase 0: accounts (login) table access flows through its owner module.
 const accountStore = require("../../services/login/accountStore")
@@ -52,6 +52,11 @@ const {
 const {
   reserveAccountID,
 } = require(path.join(__dirname, "../../services/_shared/identityAllocator"));
+const {
+  selectHandshakeSignedFunc,
+  selectPlaceboChallengeResponseHash,
+  selectVersionExchangeRelease,
+} = require(path.join(__dirname, "./handshakeCompatibility"));
 
 // The "marshaledNone" from EVE_Consts.h — a pickled Python None object
 // 0x74 = cPickle header, then 4-byte length LE, then "None" as ASCII
@@ -160,6 +165,14 @@ function buildTidiSignedFunc(clientId) {
   const pyCode = buildTidiSignedFuncSource(clientId);
   const expr = 'eval(compile("' + pyCode + '", "<tidi>", "exec"))';
   return buildMarshaledString(expr);
+}
+
+function buildHandshakeSignedFunc(runtimeConfig, clientId) {
+  return selectHandshakeSignedFunc(
+    runtimeConfig.clientCompatibilityProfile,
+    MARSHALED_NONE,
+    () => buildTidiSignedFunc(clientId),
+  );
 }
 
 const DEV_CHAT_ROLE = roleToString(DEFAULT_CHAT_ROLE);
@@ -288,6 +301,7 @@ class EVEHandshake {
     this.languageId = "EN";
     this.countryCode = normalizeCountryCode(config.defaultCountryCode);
     this.sessionId = null;
+    this.compatibilityProfile = config.clientCompatibilityProfile;
 
     // encryption variables
     // WARNING: this was made in attempt for CryptoAPI support... failed horribly :)
@@ -313,6 +327,7 @@ class EVEHandshake {
     log.debug(`[HANDSHAKE] Starting handshake with ${this.address}`);
 
     const runtimeConfig = getRuntimeConfig();
+    this.compatibilityProfile = runtimeConfig.clientCompatibilityProfile;
     const bootMetadata = new Map(buildClientBootMetadataEntries(runtimeConfig));
     const serverStatusEntries = new Map(
       buildServerStatusDict(runtimeConfig).entries,
@@ -324,11 +339,16 @@ class EVEHandshake {
       serverStatusEntries.get("cluster_usercount") || 0,
       bootMetadata.get("boot_version"), // float
       bootMetadata.get("boot_build"),
-      runtimeConfig.projectVersion,
+      selectVersionExchangeRelease(
+        runtimeConfig.clientCompatibilityProfile,
+        runtimeConfig.projectVersion,
+        runtimeConfig.projectCodename,
+        runtimeConfig.projectRegion,
+      ),
       null, // update_info
     ];
 
-    const packet = encodePacket(versionTuple);
+    const packet = this._encodePacket(versionTuple);
     this.socket.write(packet);
     log.debug(`[HANDSHAKE] Sent VersionExchangeServer`);
 
@@ -370,11 +390,18 @@ class EVEHandshake {
 
     let decoded;
     try {
-      decoded = marshalDecode(decodable);
+      decoded = marshalDecode(decodable, {
+        compatibilityProfile: this.compatibilityProfile,
+      });
     } catch (err) {
       log.err(
         `[HANDSHAKE] Failed to decode packet in state ${this.state}: ${err.message}`,
       );
+      if (this.state === State.WAIT_VERSION) {
+        log.debug(
+          `[HANDSHAKE] VersionExchangeClient raw: ${decodable.toString("hex")}`,
+        );
+      }
       // commented for flood prevention
       // log.debug(
       //   `[HANDSHAKE] Raw payload: ${decodable.toString("hex").substring(0, 100)}...`,
@@ -426,6 +453,9 @@ class EVEHandshake {
       log.err(
         `[HANDSHAKE] Invalid VersionExchangeClient: expected tuple of 6+`,
       );
+      log.debug(
+        `[HANDSHAKE] VersionExchangeClient shape: ${this._summarize(decoded)}`,
+      );
       return { done: false };
     }
 
@@ -474,7 +504,7 @@ class EVEHandshake {
       // QC (Queue Check)
       const cmdType = strVal(decoded[1]);
       log.debug(`[HANDSHAKE] Got Queue Check command (${cmdType})`);
-      const queuePos = encodePacket(0);
+      const queuePos = this._encodePacket(0);
       this.socket.write(queuePos);
       this.start();
       return { done: false };
@@ -588,7 +618,7 @@ class EVEHandshake {
     }
 
     // Send "OK CC"
-    const okPacket = encodePacket("OK CC");
+    const okPacket = this._encodePacket("OK CC");
     this.socket.write(okPacket);
     log.debug(`[HANDSHAKE] Sent "OK CC" — waiting for login credentials`);
 
@@ -617,6 +647,7 @@ class EVEHandshake {
     }
 
     // grab values from decoded
+    const clientChallenge = decoded[0];
     const loginData = decoded[1];
     const userName = strVal(dictGet(loginData, "user_name") || "");
     const passwordHash = Buffer.from(dictGet(loginData, "user_password_hash"), "hex").toString("hex")
@@ -647,7 +678,7 @@ class EVEHandshake {
 
     // send password version (PyInt 2 = "i want hashed passwords")
     // this is required for some reason
-    const pwVersionPacket = encodePacket(2);
+    const pwVersionPacket = this._encodePacket(2);
     this._sendPacket(pwVersionPacket);
     log.debug(`[HANDSHAKE] Sent password version (2)`);
 
@@ -747,12 +778,18 @@ class EVEHandshake {
       //testing: prev: [MARSHALED_NONE, false] — client eval("None") — no-op
       //testing: after: calls EnableSimDilation(0) + RegisterClientIDForSimTimeUpdates(clientId)
       //testing: to revert: change buildTidiSignedFunc(...) to MARSHALED_NONE
-      [buildTidiSignedFunc(this.clientId), false], // func tuple: [marshaled_code, verification]
+      [buildHandshakeSignedFunc(runtimeConfig, this.clientId), false],
       { type: "dict", entries: [] }, // context
       {
         type: "dict",
         entries: [
-          ["challenge_responsehash", "55087"],
+          [
+            "challenge_responsehash",
+            selectPlaceboChallengeResponseHash(
+              runtimeConfig.clientCompatibilityProfile,
+              clientChallenge,
+            ),
+          ],
           ["macho_version", runtimeConfig.machoVersion],
           ...buildClientBootMetadataEntries(runtimeConfig),
           [
@@ -769,7 +806,7 @@ class EVEHandshake {
       },
     ];
 
-    const handshakePacket = encodePacket(serverHandshake);
+    const handshakePacket = this._encodePacket(serverHandshake);
     // commented for flood prevention
     // log.debug(
     //   `[HANDSHAKE] CryptoServerHandshake hex (${handshakePacket.length} bytes): ${handshakePacket.toString("hex")}`,
@@ -850,7 +887,7 @@ class EVEHandshake {
       ],
     };
 
-    const ackPacket = encodePacket(ack);
+    const ackPacket = this._encodePacket(ack);
     this._sendPacket(ackPacket);
     log.debug(`[HANDSHAKE] Sent CryptoHandshakeAck`);
 
@@ -890,6 +927,15 @@ class EVEHandshake {
     return encrypted;
   }
 
+  _encodePacket(value) {
+    return framePayload(
+      marshalEncode(value, {
+        compatibilityProfile: this.compatibilityProfile,
+      }),
+      this.compatibilityProfile,
+    );
+  }
+
   /**
    * Send a framed packet, encrypting the payload if encryption is active.
    * The input `packet` should already be framed (4-byte length + payload).
@@ -899,17 +945,14 @@ class EVEHandshake {
       // The payload to encrypt is everything after the 4-byte length header
       const payload = packet.slice(4);
       const encrypted = this._encrypt(payload);
-      // Re-frame with the new encrypted length
-      const header = Buffer.alloc(4);
-      header.writeUInt32LE(encrypted.length, 0);
-      this.socket.write(Buffer.concat([header, encrypted]));
+      this.socket.write(framePayload(encrypted, this.compatibilityProfile));
     } else {
       this.socket.write(packet);
     }
   }
 
   _sendTransportClose(reasonCode, reasonArgs = {}, reason = reasonCode) {
-    const closePacket = encodePacket({
+    const closePacket = this._encodePacket({
       type: "cpicked",
       data: buildGPSTransportClosedCPickle(
         reasonCode,
@@ -926,6 +969,9 @@ class EVEHandshake {
    */
   _summarize(val) {
     const str = JSON.stringify(val, (key, value) => {
+      if (typeof value === "bigint") {
+        return `${value}n`;
+      }
       // Truncate Buffers in JSON output
       if (value && value.type === "Buffer" && Array.isArray(value.data)) {
         return `<Buffer ${value.data.length}B>`;
@@ -938,6 +984,8 @@ class EVEHandshake {
 }
 
 EVEHandshake._testing = {
+  MARSHALED_NONE,
+  buildHandshakeSignedFunc,
   buildTidiSignedFunc,
   buildTidiSignedFuncSource,
   buildPortraitSignedFuncSource,
