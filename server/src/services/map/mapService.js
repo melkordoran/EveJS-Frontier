@@ -119,6 +119,8 @@ const CORP_MEMBER_COLUMNS = Object.freeze(["characterID", "locationID"]);
 const AGENT_STANDING_COLUMNS = Object.freeze(["fromID", "rank"]);
 const FW_LP_COLUMNS = Object.freeze(["solarSystemID", "loyaltyPoints"]);
 const ROAMING_WEATHER_COLUMNS = Object.freeze(["locationID", "sceneType"]);
+const FRONTIER_STARTER_GROUP_ID = 1;
+const FRONTIER_STARTER_SYSTEM_ID = 30000004;
 const SOLAR_SYSTEM_ITEM_COLUMNS = Object.freeze([
   "groupID",
   "typeID",
@@ -453,6 +455,32 @@ class MapService extends BaseService {
       [],
       "eve.common.script.sys.rowset.Rowset",
     );
+  }
+
+  Handle_GetStarterGroups() {
+    const firstStation = [...worldData.ensureLoaded().stations].sort(
+      (left, right) => Number(left.stationID) - Number(right.stationID),
+    )[0];
+    const starterSystemID =
+      Number(firstStation && firstStation.solarSystemID) ||
+      FRONTIER_STARTER_SYSTEM_ID;
+    const system = worldData.getSolarSystemByID(starterSystemID);
+    const groupName =
+      (system && (system.solarSystemName || system.name)) ||
+      `System ${starterSystemID}`;
+    log.debug(
+      `[MapService] GetStarterGroups group=${FRONTIER_STARTER_GROUP_ID} ` +
+      `system=${starterSystemID}`,
+    );
+    return buildList([
+      buildDict([
+        ["id", FRONTIER_STARTER_GROUP_ID],
+        ["name", groupName],
+        ["system_ids", buildList([starterSystemID])],
+        ["leaf_ids", buildList([starterSystemID])],
+        ["edges", buildList([])],
+      ]),
+    ]);
   }
 
   Handle_GetTriglavianMinorVictorySystems(args, session, kwargs) {

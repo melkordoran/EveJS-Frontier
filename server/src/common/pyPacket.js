@@ -14,7 +14,12 @@ const path = require("path");
 const { getTypeName, MACHONETMSG_TYPE } = require(
   path.join(__dirname, "./packetTypes"),
 );
-const { decodeAddress, encodeAddress, strVal } = require(
+const {
+  decodeAddress,
+  encodeAddress,
+  strVal,
+  unwrapNamedObject,
+} = require(
   path.join(__dirname, "./machoAddress"),
 );
 const log = require(path.join(__dirname, "../utils/logger"));
@@ -23,10 +28,11 @@ const log = require(path.join(__dirname, "../utils/logger"));
  * Decode a raw marshaled tuple into a structured PyPacket object.
  */
 function decodePacket(decoded) {
-  // Unwrap PyObject wrapper
+  // Unwrap either the legacy PyObject wrapper or Frontier's ObjectEx wrapper.
   let tup = decoded;
-  if (tup && typeof tup === "object" && tup.type === "object" && tup.args) {
-    tup = tup.args;
+  const namedObject = unwrapNamedObject(tup);
+  if (namedObject) {
+    tup = namedObject.args;
   }
 
   if (!Array.isArray(tup) || tup.length < 6) {

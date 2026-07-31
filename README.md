@@ -11,9 +11,12 @@ Frontier build `3450341`. It extracts static data only from the locally
 installed client, stages a separate client copy, and leaves the retail client
 and normal EveJS installation untouched.
 
-Milestone one reaches authenticated MachoNet session creation on game TCP port
-`26000`. Setup, verification results, and the next protocol boundary are in
-[the milestone-one record](doc/FRONTIER_MILESTONE_1.md).
+Milestone two reaches Frontier character creation, returning-character
+selection, and the initial docked UI on game TCP port `26000`. Setup,
+verification results, and the next compatibility boundary are in
+[the milestone-two record](doc/FRONTIER_MILESTONE_2.md). The
+[milestone-one record](doc/FRONTIER_MILESTONE_1.md) remains the authenticated
+handshake baseline.
 
 ## Localhost only
 

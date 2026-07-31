@@ -196,9 +196,15 @@ function encodeValue(value, chunks, context = {}) {
     return;
   }
 
-  // Buffer → PyBuffer
+  // Python 3 Frontier distinguishes text from bytes. Its legacy PyBuffer
+  // opcode is decoded as UTF-8 text, so arbitrary MachoNet substreams must use
+  // PyLongString to remain binary-safe.
   if (Buffer.isBuffer(value)) {
-    chunks.push(Buffer.from([Op.PyBuffer]));
+    chunks.push(
+      Buffer.from([
+        context.frontierText ? Op.PyLongString : Op.PyBuffer,
+      ]),
+    );
     putSizeEx(value.length, chunks);
     chunks.push(value);
     return;
@@ -501,6 +507,23 @@ function encodeFrontierString(str, chunks) {
 }
 
 function encodeObject(obj, chunks, context) {
+  if (context.frontierText) {
+    // Frontier's Python 3 marshal stream represents named MachoNet objects as
+    // ObjectEx2: [[class token], state]. The legacy PyObject opcode is rejected.
+    chunks.push(Buffer.from([Op.PyObjectEx2]));
+    encodeValue(
+      [
+        [{ type: "token", value: obj.name }],
+        obj.args,
+      ],
+      chunks,
+      context,
+    );
+    chunks.push(Buffer.from([Op.PackedTerminator]));
+    chunks.push(Buffer.from([Op.PackedTerminator]));
+    return;
+  }
+
   // PyObject = Op_PyObject + type_name_as_string + args
   // In C++ EVEmu, the type name (PyToken) is encoded as a regular string
   // through the visitor pattern — NOT as Op.PyToken (0x02).

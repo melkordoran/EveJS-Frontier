@@ -104,6 +104,7 @@ const {
 const {
   reserveCharacterID,
 } = require("../_shared/identityAllocator");
+const worldData = require("../../space/worldData");
 const {
   ROLE_CONTENT,
   ROLE_GML,
@@ -434,6 +435,35 @@ function resolveStarterLocationContext(bloodlineProfile, schoolID) {
     constellationID:
       Number(starterStation && starterStation.constellationID) || 20000020,
     regionID: Number(starterStation && starterStation.regionID) || 10000002,
+  };
+}
+
+function resolveFrontierStarterLocationContext(groupID) {
+  if (
+    String(config.clientCompatibilityProfile || "").toLowerCase() !==
+      "frontier" ||
+    Number(groupID) !== 1
+  ) {
+    return null;
+  }
+
+  const station = [...worldData.ensureLoaded().stations].sort(
+    (left, right) => Number(left.stationID) - Number(right.stationID),
+  )[0];
+  if (!station) {
+    return null;
+  }
+  const system = worldData.getSolarSystemByID(station.solarSystemID) || {};
+  return {
+    corporationID: Number(station.corporationID) || 1000001,
+    factionID: Number(system.factionID) || null,
+    stationID: Number(station.stationID),
+    homeStationID: Number(station.stationID),
+    cloneStationID: Number(station.stationID),
+    solarSystemID: Number(station.solarSystemID),
+    constellationID:
+      Number(station.constellationID || system.constellationID) || 0,
+    regionID: Number(station.regionID || system.regionID) || 0,
   };
 }
 
@@ -821,7 +851,7 @@ class CharService extends BaseService {
    * Legacy EvEJS:
    *   (name, bloodlineID, genderID, ancestryID, charInfo, portraitInfo, schoolID)
    */
-  Handle_CreateCharacterWithDoll(args, session) {
+  Handle_CreateCharacterWithDoll(args, session, kwargs, creationOptions = {}) {
     const createSignature = resolveCreateCharacterSignature(args);
     let characterName = args && args.length > 0 ? args[0] : "New Character";
     const raceID =
@@ -931,10 +961,9 @@ class CharService extends BaseService {
     const starterShipTypeID = Number((raceProfile && raceProfile.shipTypeID) || 606) || 606;
     const starterShipName =
       (raceProfile && raceProfile.shipName) || "Velator";
-    const starterLocation = resolveStarterLocationContext(
-      bloodlineProfile,
-      resolvedSchoolID,
-    );
+    const starterLocation =
+      creationOptions.starterLocation ||
+      resolveStarterLocationContext(bloodlineProfile, resolvedSchoolID);
     const tutorialState = buildNewCharacterTutorialState();
     const now = BigInt(Date.now()) * 10000n + 116444736000000000n;
     const initialWalletReason = "Initial character creation ISK grant";
@@ -1102,6 +1131,32 @@ class CharService extends BaseService {
     );
 
     return newCharId;
+  }
+
+  Handle_CreateCharacterInSpace(args, session) {
+    const characterName = args && args.length > 0 ? args[0] : "";
+    const starterGroupID = readCreationIntArg(args, 1, 0);
+    const starterLocation =
+      resolveFrontierStarterLocationContext(starterGroupID);
+    if (!starterLocation) {
+      log.warn(
+        `[CharService] CreateCharacterInSpace rejected starter group ${starterGroupID}`,
+      );
+      throwWrappedUserError("CustomInfo", {
+        info: "The selected Frontier starter group is unavailable.",
+      });
+    }
+
+    log.info(
+      `[CharService] CreateCharacterInSpace group=${starterGroupID} ` +
+      `station=${starterLocation.stationID}`,
+    );
+    return this.Handle_CreateCharacterWithDoll(
+      [characterName, 1, 1, 1, null, null, 0],
+      session,
+      null,
+      { starterLocation },
+    );
   }
 
   Handle_GetNumCharacters(args, session) {

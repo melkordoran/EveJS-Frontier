@@ -30,14 +30,45 @@ function strVal(v) {
   return null;
 }
 
+function namedObjectClassName(value) {
+  if (Array.isArray(value) && value.length === 1) {
+    return namedObjectClassName(value[0]);
+  }
+  return strVal(value);
+}
+
+function unwrapNamedObject(value) {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  if (value.type === "object" && value.args) {
+    return {
+      args: value.args,
+      name: strVal(value.name),
+    };
+  }
+  if (
+    (value.type === "objectex1" || value.type === "objectex2") &&
+    Array.isArray(value.header) &&
+    value.header.length >= 2
+  ) {
+    return {
+      args: value.header[1],
+      name: namedObjectClassName(value.header[0]),
+    };
+  }
+  return null;
+}
+
 const ADDR_TYPE_NODE = 1;
 const ADDR_TYPE_CLIENT = 2;
 const ADDR_TYPE_BROADCAST = 4;
 const ADDR_TYPE_ANY = 8;
 
 function decodeAddress(tup) {
-  if (tup && typeof tup === "object" && tup.type === "object" && tup.args) {
-    tup = tup.args;
+  const namedObject = unwrapNamedObject(tup);
+  if (namedObject) {
+    tup = namedObject.args;
   }
   if (!Array.isArray(tup) || tup.length < 1) {
     return { type: "unknown", raw: tup };
@@ -146,4 +177,5 @@ module.exports = {
   decodeAddress,
   encodeAddress,
   strVal,
+  unwrapNamedObject,
 };
