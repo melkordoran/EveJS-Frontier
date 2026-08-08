@@ -2,6 +2,7 @@
 
 const path = require("path");
 
+const config = require(path.join(__dirname, "../../config"));
 const {
   buildDict,
   buildFiletimeLong,
@@ -27,6 +28,9 @@ const {
 const {
   buildPackedRow,
 } = require(path.join(__dirname, "./stream/primitives"));
+const {
+  normalizeSlimItemObjectForProfile,
+} = require(path.join(__dirname, "./stream/statePayloadCompatibility"));
 const {
   BALL_FLAG,
   BALL_MODE,
@@ -353,6 +357,28 @@ function buildSlimItemDict(entity) {
   if (slimGraphicID > 0 && !(entity && entity.suppressSlimGraphicID === true)) {
     entries.push(["graphicID", slimGraphicID]);
   }
+  if (hasEntityField("assembly_status")) {
+    entries.push(["assembly_status", toInt32(entity.assembly_status, 0)]);
+  }
+  if (
+    entity &&
+    entity.kind === "deployable" &&
+    Object.prototype.hasOwnProperty.call(entity, "targetSolarsystemID")
+  ) {
+    entries.push([
+      "targetSolarsystemID",
+      entity.targetSolarsystemID === null
+        ? null
+        : toInt32(entity.targetSolarsystemID, 0),
+    ]);
+  }
+  if (
+    entity &&
+    entity.kind === "deployable" &&
+    Object.prototype.hasOwnProperty.call(entity, "activationState")
+  ) {
+    entries.push(["activationState", toInt32(entity.activationState, 0)]);
+  }
 
   const dunObjectID = toInt32(
     entity && (entity.dunObjectID || entity.dungeonObjectID),
@@ -457,6 +483,15 @@ function buildSlimItemDict(entity) {
         ),
       ]);
     }
+  } else if (entity.kind === "landscapeSite" || entity.kind === "riftDungeon") {
+    entries.push(["locationID", entity.locationID || entity.systemID || 0]);
+    entries.push(["dungeonID", entity.dungeonID ?? null]);
+    entries.push(["dungeonNameID", entity.dungeonNameID ?? null]);
+    entries.push(["archetypeID", entity.archetypeID ?? null]);
+    entries.push([
+      "signatureRadius",
+      Math.max(1, toFiniteNumber(entity.signatureRadius, entity.radius || 1)),
+    ]);
   } else if (entity.kind === "station") {
     entries.push(["corpID", entity.corporationID || 0]);
     entries.push(["allianceID", entity.allianceID || 0]);
@@ -649,10 +684,13 @@ function buildSlimItemDict(entity) {
       : [Boolean(entity.component_activate), null];
     entries.push([
       "component_activate",
-      buildList([
-        Boolean(componentActivate[0]),
-        buildOptionalWallclockFiletimeValue(componentActivate[1]),
-      ]),
+      {
+        type: "tuple",
+        items: [
+          Boolean(componentActivate[0]),
+          buildOptionalWallclockFiletimeValue(componentActivate[1]),
+        ],
+      },
     ]);
   }
   if (
@@ -757,12 +795,15 @@ function buildSlimItemDict(entity) {
   return buildDict(entries);
 }
 
-function buildSlimItemObject(entity) {
-  return {
+function buildSlimItemObject(
+  entity,
+  compatibilityProfile = config.clientCompatibilityProfile,
+) {
+  return normalizeSlimItemObjectForProfile({
     type: "object",
     name: "foo.SlimItem",
     args: buildSlimItemDict(entity),
-  };
+  }, compatibilityProfile);
 }
 
 function buildDroneState(entities = []) {
@@ -805,6 +846,7 @@ function buildAddBalls2Payload(stateStamp, entities, simFileTime) {
     entities,
     simFileTime,
     {
+      compatibilityProfile: config.clientCompatibilityProfile,
       encodeEntityBall,
       buildSlimItemDict,
       buildDamageState,
@@ -831,7 +873,9 @@ function buildSetStatePayload(
     dbuffStateEntries,
     effectStateEntries,
     {
+      compatibilityProfile: config.clientCompatibilityProfile,
       encodeEntityBall,
+      buildSlimItemDict,
       buildSlimItemObject,
       buildDroneState,
       buildSolItem,

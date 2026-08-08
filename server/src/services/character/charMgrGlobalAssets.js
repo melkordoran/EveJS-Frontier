@@ -14,6 +14,10 @@ const {
   buildDockableAssetLocationMetadata,
   isHiddenPersonalAssetLocation,
 } = require(path.join(__dirname, "../inventory/inventoryVisibilityRules"));
+const {
+  INVENTORY_ROW_DESCRIPTOR_COLUMNS,
+  buildItemsInSystemsRowset,
+} = require(path.join(__dirname, "./charMgrGlobalAssetsRowsets"));
 
 const CONTAINER_GLOBAL_ID = 10002;
 const FLAG_WALLET = 1;
@@ -36,20 +40,6 @@ const STATION_DBROW_COLUMNS = [
   ["itemCount", 0x03],
   ["upkeepState", 0x11],
 ];
-const INVENTORY_ROW_DESCRIPTOR_COLUMNS = [
-  ["itemID", 20],
-  ["typeID", 3],
-  ["ownerID", 3],
-  ["locationID", 20],
-  ["flagID", 2],
-  ["quantity", 3],
-  ["groupID", 3],
-  ["categoryID", 3],
-  ["customInfo", 129],
-  ["singleton", 2],
-  ["stacksize", 3],
-];
-
 function toInteger(value, fallback = 0) {
   const numericValue = Number(value);
   if (!Number.isFinite(numericValue)) {
@@ -540,6 +530,15 @@ class CharMgrGlobalAssets {
       this._buildStationRows(snapshot.topLevelEntries),
       "carbon.common.script.sys.crowset.CRowset",
     );
+  }
+
+  Handle_ListItemsInSystems(_args, session) {
+    const snapshot = this._buildAssetSnapshot(session);
+    const items = snapshot.allEntries
+      .filter((entry) => this._isVisibleAssetItem(entry.item))
+      .map((entry) => entry.item);
+
+    return buildItemsInSystemsRowset(items);
   }
 
   Handle_ListStationItems(args, session) {

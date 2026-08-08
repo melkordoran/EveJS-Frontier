@@ -40,6 +40,14 @@ NATIVE_TABLES = (
     ("agentTypes", "agentTypesLoader", "agentTypes.jsonl"),
     ("bloodlines", "bloodlinesLoader", "bloodlines.jsonl"),
     ("categories", "categoriesLoader", "categories.jsonl"),
+    (
+        "creationHardpointTypes",
+        "creation_hardpoint_typesLoader",
+        "creationHardpointTypes.jsonl",
+    ),
+    ("creationModules", "creation_modulesLoader", "creationModules.jsonl"),
+    ("creationParts", "creation_partsLoader", "creationParts.jsonl"),
+    ("creationTemplates", "creation_templatesLoader", "creationTemplates.jsonl"),
     ("dogmaAttributes", "dogmaAttributesLoader", "dogmaAttributes.jsonl"),
     ("dogmaEffects", "dogmaEffectsLoader", "dogmaEffects.jsonl"),
     ("factions", "factionsLoader", "factions.jsonl"),
@@ -47,6 +55,11 @@ NATIVE_TABLES = (
     ("npcCharacters", "npcCharactersLoader", "npcCharacters.jsonl"),
     ("npcCorporations", "npcCorporationsLoader", "npcCorporations.jsonl"),
     ("races", "racesLoader", "races.jsonl"),
+    (
+        "spaceComponentsByType",
+        "spaceComponentsByTypeLoader",
+        "spaceComponentsByType.jsonl",
+    ),
     ("stationOperations", "stationOperationsLoader", "stationOperations.jsonl"),
     ("typeDogma", "typeDogmaLoader", "typeDogma.jsonl"),
     ("typeMaterials", "typeMaterialsLoader", "typeMaterials.jsonl"),
@@ -108,16 +121,21 @@ def clean_float(value):
 
 def object_fields(value):
     result = {}
+    unreadable_fields = []
     for name in dir(value):
         if name.startswith("_"):
             continue
         try:
             field_value = getattr(value, name)
+            if callable(field_value):
+                continue
+            result[name] = to_plain(field_value)
         except (AttributeError, KeyError):
             continue
-        if callable(field_value):
-            continue
-        result[name] = to_plain(field_value)
+        except (UnicodeError, ValueError):
+            unreadable_fields.append(name)
+    if unreadable_fields:
+        result["_unreadableFields"] = unreadable_fields
     return result
 
 
@@ -257,8 +275,253 @@ def vector(value):
 def optional(value, field, default=None):
     try:
         return getattr(value, field)
-    except (AttributeError, KeyError):
+    except (AttributeError, KeyError, UnicodeError, ValueError):
         return default
+
+
+LANDSCAPE_LOCATOR_ROLES = {
+    91211: "resourceLocator",
+    91212: "eventLocator",
+    91232: "poiLocator",
+    91302: "entryLocator",
+}
+
+
+def landscape_pattern_row(pattern):
+    return {
+        "dungeonID": int(optional(pattern, "dungeonID", 0) or 0),
+        "maxOccurrences": int(optional(pattern, "maxOccurrences", 0) or 0),
+        "minOccurrences": int(optional(pattern, "minOccurrences", 0) or 0),
+        "weight": clean_float(float(optional(pattern, "weight", 0.0) or 0.0)),
+    }
+
+
+def landscape_dungeon_row(dungeon_id, dungeon):
+    rooms = []
+    for room_id in sorted_keys(optional(dungeon, "rooms", {}) or {}):
+        room = dungeon.rooms[room_id]
+        objects = []
+        for object_id in sorted_keys(optional(room, "objects", {}) or {}):
+            dungeon_object = room.objects[object_id]
+            type_id = int(optional(dungeon_object, "typeID", 0) or 0)
+            objects.append({
+                "groupTag": str(optional(dungeon_object, "groupTag", "") or ""),
+                "objectID": int(object_id),
+                "position": vector(optional(dungeon_object, "position")),
+                "role": LANDSCAPE_LOCATOR_ROLES.get(type_id, "scenery"),
+                "roomID": int(room_id),
+                "typeID": type_id,
+            })
+        rooms.append({
+            "objects": objects,
+            "position": {
+                "x": clean_float(float(optional(room, "x", 0.0) or 0.0)),
+                "y": clean_float(float(optional(room, "y", 0.0) or 0.0)),
+                "z": clean_float(float(optional(room, "z", 0.0) or 0.0)),
+            },
+            "roomID": int(room_id),
+        })
+    return {
+        "_key": int(dungeon_id),
+        "archetypeID": int(optional(dungeon, "archetypeID", 0) or 0),
+        "dungeonID": int(dungeon_id),
+        "dungeonNameID": int(optional(dungeon, "dungeonNameID", 0) or 0),
+        "entryObjectID": int(optional(dungeon, "entryObjectID", 0) or 0),
+        "entryTypeID": int(optional(dungeon, "entryTypeID", 0) or 0),
+        "rooms": rooms,
+    }
+
+
+def frontier_dungeon_row(dungeon_id, dungeon, messages):
+    rooms = []
+    for room_id in sorted_keys(optional(dungeon, "rooms", {}) or {}):
+        room = dungeon.rooms[room_id]
+        objects = []
+        for object_id in sorted_keys(optional(room, "objects", {}) or {}):
+            dungeon_object = room.objects[object_id]
+            type_id = int(optional(dungeon_object, "typeID", 0) or 0)
+            object_row = object_fields(dungeon_object)
+            object_row.update({
+                "objectID": int(object_id),
+                "position": vector(optional(dungeon_object, "position")),
+                "role": LANDSCAPE_LOCATOR_ROLES.get(type_id, "scenery"),
+                "roomID": int(room_id),
+                "typeID": type_id,
+            })
+            objects.append(object_row)
+
+        room_row = object_fields(room)
+        room_row.update({
+            "objects": objects,
+            "position": {
+                "x": clean_float(float(optional(room, "x", 0.0) or 0.0)),
+                "y": clean_float(float(optional(room, "y", 0.0) or 0.0)),
+                "z": clean_float(float(optional(room, "z", 0.0) or 0.0)),
+            },
+            "roomID": int(room_id),
+        })
+        rooms.append(room_row)
+
+    triggers = []
+    for trigger_id in sorted_keys(optional(dungeon, "triggers", {}) or {}):
+        trigger = dungeon.triggers[trigger_id]
+        events = []
+        for event_id in sorted_keys(optional(trigger, "triggerEvents", {}) or {}):
+            event = trigger.triggerEvents[event_id]
+            event_row = object_fields(event)
+            event_row["eventID"] = int(event_id)
+            events.append(event_row)
+        trigger_row = object_fields(trigger)
+        trigger_row.update({
+            "triggerEvents": events,
+            "triggerID": int(trigger_id),
+        })
+        triggers.append(trigger_row)
+
+    dungeon_name_id = int(optional(dungeon, "dungeonNameID", 0) or 0)
+    row = object_fields(dungeon)
+    row.update({
+        "_key": int(dungeon_id),
+        "archetypeID": int(optional(dungeon, "archetypeID", 0) or 0),
+        "dungeonID": int(dungeon_id),
+        "dungeonName": localized_text(messages, dungeon_name_id, ""),
+        "dungeonNameID": dungeon_name_id,
+        "entryObjectID": int(optional(dungeon, "entryObjectID", 0) or 0),
+        "entryTypeID": int(optional(dungeon, "entryTypeID", 0) or 0),
+        "rooms": rooms,
+        "triggers": triggers,
+    })
+    return row
+
+
+def export_landscape_sites(request, out_dir, messages, report):
+    landscape_loader = importlib.import_module("landscapeLoader")
+    ecosystem_loader = importlib.import_module("ecosystemLoader")
+    dungeon_loader = importlib.import_module("dungeonsLoader")
+    landscapes = landscape_loader.load(resource_path(request, "landscapes"))
+    ecosystems = ecosystem_loader.load(resource_path(request, "ecosystems"))
+    dungeons = dungeon_loader.load(resource_path(request, "dungeons"))
+
+    referenced_dungeon_ids = set()
+
+    def ecosystem_rows():
+        for ecosystem_id in sorted_keys(ecosystems):
+            ecosystem = ecosystems[ecosystem_id]
+            entry_pattern = optional(ecosystem, "entryPattern")
+            entry_dungeon_id = int(optional(entry_pattern, "dungeonID", 0) or 0)
+            natural_patterns = [
+                landscape_pattern_row(pattern)
+                for pattern in (optional(ecosystem, "naturalWorldPatterns", []) or [])
+            ]
+            broken_patterns = [
+                landscape_pattern_row(pattern)
+                for pattern in (optional(ecosystem, "brokenWorldPatterns", []) or [])
+            ]
+            if entry_dungeon_id > 0:
+                referenced_dungeon_ids.add(entry_dungeon_id)
+            referenced_dungeon_ids.update(
+                pattern["dungeonID"]
+                for pattern in natural_patterns + broken_patterns
+                if pattern["dungeonID"] > 0
+            )
+            yield {
+                "_key": int(ecosystem_id),
+                "brokenWorldPatterns": broken_patterns,
+                "ecosystemID": int(ecosystem_id),
+                "entryDungeonID": entry_dungeon_id,
+                "maxBrokenWorldPatterns": int(
+                    optional(ecosystem, "maxBrokenWorldPatterns", 0) or 0
+                ),
+                "maxNaturalWorldPatterns": int(
+                    optional(ecosystem, "maxNaturalWorldPatterns", 0) or 0
+                ),
+                "minBrokenWorldPatterns": int(
+                    optional(ecosystem, "minBrokenWorldPatterns", 0) or 0
+                ),
+                "minNaturalWorldPatterns": int(
+                    optional(ecosystem, "minNaturalWorldPatterns", 0) or 0
+                ),
+                "name": str(optional(ecosystem, "name", "") or ""),
+                "naturalWorldPatterns": natural_patterns,
+            }
+
+    report["outputs"]["landscapeEcosystems.jsonl"] = write_jsonl(
+        out_dir,
+        "landscapeEcosystems.jsonl",
+        ecosystem_rows(),
+    )
+    report["outputs"]["landscapeDungeonTemplates.jsonl"] = write_jsonl(
+        out_dir,
+        "landscapeDungeonTemplates.jsonl",
+        (
+            landscape_dungeon_row(dungeon_id, dungeons[dungeon_id])
+            for dungeon_id in sorted(referenced_dungeon_ids)
+            if dungeon_id in dungeons
+        ),
+    )
+    report["outputs"]["frontierDungeonTemplates.jsonl"] = write_jsonl(
+        out_dir,
+        "frontierDungeonTemplates.jsonl",
+        (
+            frontier_dungeon_row(dungeon_id, dungeons[dungeon_id], messages)
+            for dungeon_id in sorted_keys(dungeons)
+        ),
+    )
+
+    def rows():
+        for solar_system_id in sorted_keys(landscapes):
+            landscape = landscapes[solar_system_id]
+            feature_sets = (
+                ("asteroidBelt", optional(landscape, "asteroidBelts", {})),
+                ("trojan", optional(landscape, "trojans", {})),
+            )
+            for feature_kind, features in feature_sets:
+                for feature_id in sorted_keys(features):
+                    feature = features[feature_id]
+                    feature_tags = [
+                        str(tag)
+                        for tag in (optional(feature, "tags", []) or [])
+                    ]
+                    sites = optional(feature, "sites", {}) or {}
+                    for site_id in sorted_keys(sites):
+                        site = sites[site_id]
+                        ecosystem_id = int(site.ecosystemID)
+                        ecosystem = ecosystems.get(ecosystem_id)
+                        entry_pattern = optional(ecosystem, "entryPattern")
+                        dungeon_id = int(optional(entry_pattern, "dungeonID", 0) or 0)
+                        dungeon = dungeons.get(dungeon_id)
+                        type_id = int(optional(dungeon, "entryTypeID", 46541) or 46541)
+                        position = site.position
+                        yield {
+                            "_key": int(site_id),
+                            "archetypeID": int(optional(dungeon, "archetypeID", 0) or 0),
+                            "dungeonEntryObjectID": int(
+                                optional(dungeon, "entryObjectID", 0) or 0
+                            ),
+                            "dungeonID": dungeon_id,
+                            "dungeonNameID": int(
+                                optional(dungeon, "dungeonNameID", 0) or 0
+                            ),
+                            "ecosystemID": ecosystem_id,
+                            "ecosystemName": str(optional(ecosystem, "name", "") or ""),
+                            "featureID": int(feature_id),
+                            "featureKind": feature_kind,
+                            "featureTags": feature_tags,
+                            "position": {
+                                "x": clean_float(float(position.x)),
+                                "y": clean_float(float(position.y)),
+                                "z": clean_float(float(position.z)),
+                            },
+                            "siteID": int(site_id),
+                            "solarSystemID": int(solar_system_id),
+                            "typeID": type_id,
+                        }
+
+    report["outputs"]["landscapeSites.jsonl"] = write_jsonl(
+        out_dir,
+        "landscapeSites.jsonl",
+        rows(),
+    )
 
 
 def static_row(key, value, name_field=None):
@@ -499,6 +762,7 @@ def main():
     )
 
     export_native_tables(request, out_dir, messages, report)
+    export_landscape_sites(request, out_dir, messages, report)
     export_universe_tables(request, out_dir, report)
     print(json.dumps(report, sort_keys=True))
 

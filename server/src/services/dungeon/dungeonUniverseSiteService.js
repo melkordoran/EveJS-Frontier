@@ -8277,6 +8277,7 @@ class DungeonUniverseSiteService extends BaseService {
 }
 
 DungeonUniverseSiteService.buildSiteEntity = buildSiteEntity;
+DungeonUniverseSiteService.buildEnvironmentEntities = buildEnvironmentEntities;
 DungeonUniverseSiteService.ensureSiteContentsMaterialized = ensureSiteContentsMaterialized;
 DungeonUniverseSiteService.handleSceneCreated = handleSceneCreated;
 DungeonUniverseSiteService.hasPendingSiteTeardownForInstance =

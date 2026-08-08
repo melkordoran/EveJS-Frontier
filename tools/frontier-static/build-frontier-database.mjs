@@ -67,7 +67,48 @@ function validateDatabase(dataDir, snapshotManifest, databaseManifest) {
   const celestials = readTable(dataDir, "celestials", "celestials");
   const stations = readTable(dataDir, "stations", "stations");
   const itemTypes = readTable(dataDir, "itemTypes", "types");
+  const creationHardpointTypes = readTable(
+    dataDir,
+    "creationHardpointTypes",
+    "hardpointTypes",
+  );
+  const creationModules = readTable(dataDir, "creationModules", "modules");
+  const creationParts = readTable(dataDir, "creationParts", "parts");
+  const creationTemplates = readTable(dataDir, "creationTemplates", "templates");
+  const frontierDungeonTemplates = readTable(
+    dataDir,
+    "frontierDungeonTemplates",
+    "dungeons",
+  );
+  const landscapeDungeonTemplates = readTable(
+    dataDir,
+    "landscapeDungeonTemplates",
+    "dungeons",
+  );
+  const landscapeEcosystems = readTable(
+    dataDir,
+    "landscapeEcosystems",
+    "ecosystems",
+  );
+  const landscapeSites = readTable(dataDir, "landscapeSites", "sites");
+  const spaceComponentsByType = readTable(
+    dataDir,
+    "spaceComponentsByType",
+    "types",
+  );
   const characters = readTable(dataDir, "characters");
+
+  const componentTypesByID = new Map(
+    spaceComponentsByType.map((row) => [Number(row.typeID ?? row._key), row]),
+  );
+  const relay = componentTypesByID.get(90184);
+  const relaySite = componentTypesByID.get(91717);
+  if (Number(relay?.smartDeployable?.constructionSite) !== 91717) {
+    throw new Error("Generated Relay component data does not map to construction site 91717");
+  }
+  if (!relaySite?.assemblyConstruction) {
+    throw new Error("Generated Relay construction site lacks assemblyConstruction");
+  }
 
   const expectedCelestials = [
     "mapStars.jsonl",
@@ -81,6 +122,18 @@ function validateDatabase(dataDir, snapshotManifest, databaseManifest) {
   const expected = {
     celestials: expectedCelestials,
     itemTypes: snapshotManifest.outputs["types.jsonl"].records - 1,
+    creationHardpointTypes:
+      snapshotManifest.outputs["creationHardpointTypes.jsonl"].records,
+    creationModules: snapshotManifest.outputs["creationModules.jsonl"].records,
+    creationParts: snapshotManifest.outputs["creationParts.jsonl"].records,
+    creationTemplates: snapshotManifest.outputs["creationTemplates.jsonl"].records,
+    frontierDungeonTemplates:
+      snapshotManifest.outputs["frontierDungeonTemplates.jsonl"].records,
+    landscapeDungeonTemplates:
+      snapshotManifest.outputs["landscapeDungeonTemplates.jsonl"].records,
+    landscapeEcosystems:
+      snapshotManifest.outputs["landscapeEcosystems.jsonl"].records,
+    landscapeSites: snapshotManifest.outputs["landscapeSites.jsonl"].records,
     stations: snapshotManifest.outputs["npcStations.jsonl"].records,
     stargates: snapshotManifest.outputs["mapStargates.jsonl"].records,
     systems: snapshotManifest.outputs["mapSolarSystems.jsonl"].records,
@@ -88,6 +141,14 @@ function validateDatabase(dataDir, snapshotManifest, databaseManifest) {
   const actual = {
     celestials: celestials.length,
     itemTypes: itemTypes.length,
+    creationHardpointTypes: creationHardpointTypes.length,
+    creationModules: creationModules.length,
+    creationParts: creationParts.length,
+    creationTemplates: creationTemplates.length,
+    frontierDungeonTemplates: frontierDungeonTemplates.length,
+    landscapeDungeonTemplates: landscapeDungeonTemplates.length,
+    landscapeEcosystems: landscapeEcosystems.length,
+    landscapeSites: landscapeSites.length,
     stations: stations.length,
     stargates: stargates.length,
     systems: systems.length,
@@ -123,6 +184,39 @@ function validateDatabase(dataDir, snapshotManifest, databaseManifest) {
       `Lagrange point count mismatch: expected ${expectedLagrange}, ` +
       `found ${lagrangePoints.length}`,
     );
+  }
+
+  const clientBuild = Number(snapshotManifest.source.client.build);
+  if (new Set([3450341, 3455996]).has(clientBuild)) {
+    const riftF935 = frontierDungeonTemplates.find(
+      (dungeon) => Number(dungeon.dungeonID) === 14001,
+    );
+    const rift05D8 = frontierDungeonTemplates.find(
+      (dungeon) => Number(dungeon.dungeonID) === 14008,
+    );
+    if (
+      Number(riftF935?.entryTypeID) !== 92395 ||
+      Number(rift05D8?.entryTypeID) !== 92415 ||
+      !Array.isArray(riftF935?.triggers) ||
+      !Array.isArray(rift05D8?.triggers)
+    ) {
+      throw new Error(
+        `Frontier build ${clientBuild} is missing the authoritative F935/05D8 Rift templates`,
+      );
+    }
+    const fringeTallyport = landscapeSites.find(
+      (site) => Number(site.itemID) === 900202923,
+    );
+    if (
+      !fringeTallyport ||
+      Number(fringeTallyport.solarSystemID) !== 30010146 ||
+      Number(fringeTallyport.typeID) !== 92480 ||
+      Number(fringeTallyport.dungeonID) !== 14026
+    ) {
+      throw new Error(
+        `Frontier build ${clientBuild} is missing the Mraka Fringe Tallyport landscape site`,
+      );
+    }
   }
 
   return {
@@ -196,6 +290,7 @@ async function main() {
     `[frontier-static] Database build ${build}: ` +
     `${report.systems.toLocaleString()} systems, ` +
     `${report.celestials.toLocaleString()} celestials, ` +
+    `${report.landscapeSites.toLocaleString()} landscape sites, ` +
     `${report.stargates.toLocaleString()} stargates.`,
   );
   console.log(

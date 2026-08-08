@@ -7,6 +7,9 @@ const deadspaceWarpPolicy = require(path.join(
   "../../../services/dungeon/deadspaceWarpPolicy.js",
 ));
 const {
+  isFrontierProfile,
+} = require("../../../services/ship/destinyCompatibility.js");
+const {
   DESTINY_CONTRACTS,
 } = require("../authority/destinyContracts.js");
 const {
@@ -652,7 +655,12 @@ function createMovementWarpCommands(deps = {}) {
       entity.pendingWarp = pendingWarp;
       entity.mode = "WARP";
       entity.speedFraction = 1;
-      entity.direction = normalizeVector(
+      // Deliberately leave entity.direction untouched: while the warp is
+      // pending, advanceGotoMovement steers the entity toward targetPoint at
+      // its real angular rate, and evaluatePendingWarp gates warp start on
+      // genuine alignment. Snapping the heading here pre-satisfied the gate
+      // and made warp entry look instant.
+      const alignDirection = normalizeVector(
         subtractVectors(pendingWarp.rawDestination, entity.position),
         entity.direction,
       );
@@ -695,24 +703,39 @@ function createMovementWarpCommands(deps = {}) {
         }
       }
 
-      const prepareDispatch = buildWarpPrepareDispatch(
-        entity,
-        pilotPrepareStamp,
-        entity.warpState,
+      const usesFrontierNativeWarpActivation = isFrontierProfile(
+        session && session.compatibilityProfile,
       );
+      pendingWarp.usesFrontierNativeWarpActivation =
+        usesFrontierNativeWarpActivation;
       if (session) {
-        if (isReadyForDestiny(session)) {
-          // Keep the pilot prepare bundle authored on the raw warp-prepare
-          // stamp and let the normal destiny delivery path place it safely for
-          // the session. Forcing it directly onto the visible stamp causes
-          // Michelle to flush/rebase the local warp-start handoff early, which
-          // shortens the client-rendered accel into the tunnel.
-          runtime.sendDestinyUpdates(session, prepareDispatch.pilotUpdates, false, {
-            destinyAuthorityContract:
-              DESTINY_CONTRACTS.CRITICAL_MOVEMENT_OR_SHIPPRIME,
-            minimumLeadFromCurrentHistory: PILOT_WARP_ACTIVATION_DELAY_DESTINY_TICKS,
-            maximumLeadFromCurrentHistory: PILOT_WARP_ACTIVATION_DELAY_DESTINY_TICKS,
-          });
+        // Physical align first: the pilot receives the same GotoDirection
+        // command watchers get, so the client DLL rotates and accelerates the
+        // ship itself. The native WarpTo prepare bundle is deferred to the
+        // align-ready gate in the scene tick (see the pendingWarp start path
+        // in runtime.js), where it is re-authored on fresh history-safe
+        // stamps. The DLL then enters WarpState=1 already aligned and
+        // transitions to the tunnel on its own.
+        pendingWarp.pilotPrepareDeferred = isReadyForDestiny(session) === true;
+        const speedFractionChanged =
+          Math.abs(entity.speedFraction - previousSpeedFraction) > 0.000001;
+        if (pendingWarp.pilotPrepareDeferred) {
+          runtime.sendDestinyUpdates(
+            session,
+            buildDirectedMovementUpdates(
+              entity,
+              alignDirection,
+              speedFractionChanged,
+              pilotPrepareStamp,
+            ),
+            false,
+            {
+              destinyAuthorityContract:
+                DESTINY_CONTRACTS.CRITICAL_MOVEMENT_OR_SHIPPRIME,
+              minimumLeadFromCurrentHistory: PILOT_WARP_ACTIVATION_DELAY_DESTINY_TICKS,
+              maximumLeadFromCurrentHistory: PILOT_WARP_ACTIVATION_DELAY_DESTINY_TICKS,
+            },
+          );
         }
         const observerAlignStamp = selectFurthestDestinyStamp(
           movementStamp,
@@ -721,8 +744,8 @@ function createMovementWarpCommands(deps = {}) {
         const alignUpdates = tagUpdatesRequireExistingVisibility(
           buildDirectedMovementUpdates(
             entity,
-            entity.direction,
-            Math.abs(entity.speedFraction - previousSpeedFraction) > 0.000001,
+            alignDirection,
+            speedFractionChanged,
             observerAlignStamp,
           ),
         );
@@ -734,6 +757,14 @@ function createMovementWarpCommands(deps = {}) {
           runtime.scheduleWatcherMovementAnchor(entity, now, "warpAlign");
         }
       } else {
+        const prepareDispatch = buildWarpPrepareDispatch(
+          entity,
+          pilotPrepareStamp,
+          entity.warpState,
+          {
+            includePilotActivationVelocity: usesFrontierNativeWarpActivation,
+          },
+        );
         runtime.broadcastMovementUpdates(prepareDispatch.sharedUpdates);
       }
       return {

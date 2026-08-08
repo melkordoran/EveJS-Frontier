@@ -93,12 +93,14 @@ function buildSkillQueuePayload(entries = []) {
 function buildSkillNotificationInfo(skillRecord, options = {}) {
   return buildCharacterSkillEntry(skillRecord, {
     includeMetadata: options.includeMetadata !== false,
+    compatibilityProfile: options.compatibilityProfile,
   });
 }
 
 function buildSkillNotificationDict(skillRecords = [], options = {}) {
   return buildCharacterSkillDict(dedupeSkillRecords(skillRecords), {
     includeMetadata: options.includeMetadata !== false,
+    compatibilityProfile: options.compatibilityProfile,
   });
 }
 
@@ -309,6 +311,11 @@ function emitSkillSessionState(
   const removedSkills = dedupeSkillRecords(options.removedSkillRecords);
   const hasSkillMutation = changedSkills.length > 0 || removedSkills.length > 0;
   const timeStamp = options.timeStamp || currentFileTime();
+  const skillTransportOptions = {
+    ...options,
+    compatibilityProfile:
+      options.compatibilityProfile ?? session.compatibilityProfile,
+  };
 
   if (hasSkillMutation) {
     applyCharacterToSession(session, numericCharacterID, {
@@ -327,7 +334,7 @@ function emitSkillSessionState(
 
   if (changedSkills.length > 0) {
     session.sendNotification("OnServerSkillsChanged", "charid", [
-      buildSkillNotificationDict(changedSkills, options),
+      buildSkillNotificationDict(changedSkills, skillTransportOptions),
       options.serverReason === undefined ? null : options.serverReason,
       buildFiletimeLong(timeStamp),
     ]);
@@ -339,7 +346,7 @@ function emitSkillSessionState(
         removedSkills
           .map((skillRecord) => buildRemovedSkillServerRecord(skillRecord))
           .filter(Boolean),
-        options,
+        skillTransportOptions,
       ),
       buildFiletimeLong(timeStamp),
     ]);
@@ -356,7 +363,7 @@ function emitSkillSessionState(
       ]);
     }
     session.sendNotification("OnSkillsChanged", "clientID", [
-      buildSkillNotificationDict(clientSkillChanges, options),
+      buildSkillNotificationDict(clientSkillChanges, skillTransportOptions),
     ]);
   }
 

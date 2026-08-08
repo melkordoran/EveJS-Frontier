@@ -1,6 +1,7 @@
 const path = require("path");
 const {
   spawnShipInHangarForSession,
+  giveItemToActiveShipCargoForSession,
   giveItemToHangarForSession,
   getActiveShipRecord,
   getCharacterRecord,
@@ -162,6 +163,12 @@ const {
 const npcService = require("../../space/npc");
 // EveAnomUtility: dev command to spawn an authored dungeon-authority template's NPCs at the player.
 const dungeonAuthorityForSpawnSite = require("../dungeon/dungeonAuthority");
+const {
+  executeFrontierLandscapeCommand,
+} = require("./frontierLandscapeCommands");
+const {
+  executeFrontierRiftCommand,
+} = require("./frontierRiftCommands");
 const {
   CAPITAL_NPC_CHAT_COMMANDS,
   CAPITAL_NPC_HELP_LINES,
@@ -353,6 +360,7 @@ const AVAILABLE_SLASH_COMMANDS = [
   "reprocesssmoke",
   "laser",
   "lasers",
+  "load",
   "hybrids",
   "railgun",
   "projectiles",
@@ -401,6 +409,9 @@ const AVAILABLE_SLASH_COMMANDS = [
   "motd",
   "mailme",
   "spawnsite",
+  "landscape",
+  "ecosystem",
+  "rift",
   "npc",
   "mnpc",
   "npctest",
@@ -473,6 +484,8 @@ const COMMANDS_HELP_TEXT = [
   "/help",
   "/motd",
   "/mailme",
+  "/landscape <list [name]|inspect ecosystemID|sites|spawn ecosystemID [placement]|remove siteID|nearest|here>",
+  "/rift <list [name]|inspect template|sites|spawn [template] [placement]|remove siteID|nearest|here>",
   "/allskills",
   "/npc [amount] [faction|profile|pool]",
   "/mnpc [amount] [faction|profile|pool]",
@@ -526,6 +539,7 @@ const COMMANDS_HELP_TEXT = [
   "/removeskill <target> <skill|all>",
   "/laser",
   "/lasers",
+  "/load me <item name|typeID> [amount]",
   "/hybrids",
   "/railgun",
   "/projectiles",
@@ -5865,7 +5879,14 @@ function handleGiveItemCommand(session, argumentText, chatHub, options) {
   );
 }
 
-function handleCreateItemCommand(session, argumentText, chatHub, options, commandName = "createitem") {
+function handleCreateItemCommand(
+  session,
+  argumentText,
+  chatHub,
+  options,
+  commandName = "createitem",
+  behavior = {},
+) {
   const slashCommand = `/${String(commandName || "createitem").trim() || "createitem"}`;
   const trimmedArgument = String(argumentText || "").trim();
   if (!trimmedArgument) {
@@ -5917,17 +5938,28 @@ function handleCreateItemCommand(session, argumentText, chatHub, options, comman
     return handledResult(chatHub, session, options, message.trim());
   }
 
-  const giveResult = giveItemToHangarForSession(
-    session,
-    itemLookup.match,
-    normalizedAmount,
-  );
+  const createInShipCargo = behavior.forceShipCargo === true || !isDockedSession(session);
+  const giveResult = createInShipCargo
+    ? giveItemToActiveShipCargoForSession(
+        session,
+        itemLookup.match,
+        normalizedAmount,
+        behavior.shipGrantOptions || {},
+      )
+    : giveItemToHangarForSession(
+        session,
+        itemLookup.match,
+        normalizedAmount,
+      );
   if (!giveResult.success) {
     let message = "Item creation failed.";
-    if (giveResult.errorMsg === "DOCK_REQUIRED") {
-      message = `You must be docked before using ${slashCommand}.`;
-    } else if (giveResult.errorMsg === "CHARACTER_NOT_SELECTED") {
+    if (giveResult.errorMsg === "CHARACTER_NOT_SELECTED") {
       message = `Select a character before using ${slashCommand}.`;
+    } else if (
+      giveResult.errorMsg === "ACTIVE_SHIP_NOT_FOUND" ||
+      giveResult.errorMsg === "ACTIVE_SHIP_NOT_IN_SPACE"
+    ) {
+      message = `You must have an active ship in space before using ${slashCommand}.`;
     } else if (giveResult.errorMsg === "ITEM_TYPE_NOT_FOUND") {
       message = `Item type not found: ${trimmedArgument}.`;
     } else if (giveResult.errorMsg === "ITEM_QUANTITY_OUT_OF_RANGE") {
@@ -5947,6 +5979,30 @@ function handleCreateItemCommand(session, argumentText, chatHub, options, comman
     handled: true,
     message: firstItemID,
   };
+}
+
+function handleFrontierLoadCommand(session, argumentText, chatHub, options) {
+  const match = String(argumentText || "").trim().match(/^me\s+(.+)$/i);
+  if (!match) {
+    return handledResult(
+      chatHub,
+      session,
+      options,
+      "Usage: /load me <item name|typeID> [amount]",
+    );
+  }
+
+  return handleCreateItemCommand(
+    session,
+    match[1],
+    chatHub,
+    options,
+    "load",
+    {
+      forceShipCargo: true,
+      shipGrantOptions: { individualItems: true, singleton: 1 },
+    },
+  );
 }
 
 function handleMineralsCommand(session, chatHub, options) {
@@ -10589,6 +10645,16 @@ function executeChatCommand(session, rawMessage, chatHub, options = {}) {
     return handleSpawnSiteCommand(session, argumentText, chatHub, options);
   }
 
+  if (command === "landscape" || command === "ecosystem") {
+    const result = executeFrontierLandscapeCommand(session, argumentText);
+    return handledResult(chatHub, session, options, result.message);
+  }
+
+  if (command === "rift") {
+    const result = executeFrontierRiftCommand(session, argumentText);
+    return handledResult(chatHub, session, options, result.message);
+  }
+
   if (command === "npc") {
     return handleNpcCommand(session, argumentText, chatHub, options);
   }
@@ -11578,6 +11644,10 @@ function executeChatCommand(session, rawMessage, chatHub, options = {}) {
 
   if (command === "create" || command === "createitem") {
     return handleCreateItemCommand(session, argumentText, chatHub, options, command);
+  }
+
+  if (command === "load") {
+    return handleFrontierLoadCommand(session, argumentText, chatHub, options);
   }
 
   if (command === "giveitem" || command === "item") {

@@ -36,7 +36,7 @@ class ObjCacheService extends BaseService {
     super("objectCaching");
   }
 
-  Handle_GetCachableObject(args) {
+  Handle_GetCachableObject(args, session) {
     const shared = args && args.length > 0 ? args[0] : 1;
     const objectId = args && args.length > 1 ? args[1] : null;
     const objectVersion = args && args.length > 2 ? args[2] : null;
@@ -46,7 +46,13 @@ class ObjCacheService extends BaseService {
       `[ObjCache] GetCachableObject ${__testHooks.describeObjectId(objectId)}`,
     );
 
-    return getCachableObjectResponse(shared, objectId, objectVersion, nodeId);
+    return getCachableObjectResponse(
+      shared,
+      objectId,
+      objectVersion,
+      nodeId,
+      session && session.compatibilityProfile,
+    );
   }
 
   Handle_GetCachedObject(args) {

@@ -7,7 +7,7 @@ Join the project Discord: [https://discord.gg/KMuJrMDEBa](https://discord.gg/KMu
 ## EVE Frontier compatibility fork
 
 This checkout contains an experimental, isolated compatibility profile for EVE
-Frontier build `3450341`. It extracts static data only from the locally
+Frontier build `3455996`. It extracts static data only from the locally
 installed client, stages a separate client copy, and leaves the retail client
 and normal EveJS installation untouched.
 

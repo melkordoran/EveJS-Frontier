@@ -487,6 +487,9 @@ function applyYieldPresentationToEntity(entity, state, summary = null) {
   }
 
   const yieldTypeRecord = resolveItemByTypeID(toInt(state.yieldTypeID, 0)) || null;
+  const miningPresentationTypeRecord =
+    resolveItemByTypeID(toInt(entity.miningPresentationTypeID, 0)) ||
+    yieldTypeRecord;
   const resolvedPresentation =
     typeof resolveMiningVisualPresentation === "function" && yieldTypeRecord
       ? (() => {
@@ -521,12 +524,12 @@ function applyYieldPresentationToEntity(entity, state, summary = null) {
   if (yieldTypeRecord) {
     entity.miningYieldTypeID = yieldTypeRecord.typeID;
     entity.miningYieldKind = state.yieldKind || null;
-    entity.slimTypeID = yieldTypeRecord.typeID;
-    entity.slimGroupID = yieldTypeRecord.groupID;
-    entity.slimCategoryID = yieldTypeRecord.categoryID;
+    entity.slimTypeID = miningPresentationTypeRecord.typeID;
+    entity.slimGroupID = miningPresentationTypeRecord.groupID;
+    entity.slimCategoryID = miningPresentationTypeRecord.categoryID;
     if (entity.suppressSlimName !== true) {
-      entity.itemName = yieldTypeRecord.name;
-      entity.slimName = yieldTypeRecord.name;
+      entity.itemName = miningPresentationTypeRecord.name;
+      entity.slimName = miningPresentationTypeRecord.name;
     }
   } else if (spaceTypeRecord) {
     entity.slimTypeID = spaceTypeRecord.typeID;
@@ -767,10 +770,12 @@ function buildMineableState(scene, entity, persistedState = null) {
   const rawPersistedState = persistedState
     ? normalizeStateRecord(persistedState)
     : null;
-  const templateEntry = pickWeightedTemplateEntry(
-    entity,
-    resolveTemplateSetForEntity(scene, entity),
-  );
+  const templateEntry = entity && entity.skipMiningTemplateResolution === true
+    ? null
+    : pickWeightedTemplateEntry(
+      entity,
+      resolveTemplateSetForEntity(scene, entity),
+    );
   const yieldType =
     resolveItemByTypeID(
       toInt(rawPersistedState && rawPersistedState.yieldTypeID, 0),
@@ -1687,6 +1692,7 @@ module.exports = {
   _testing: {
     getTemplateEntriesForFieldStyle,
     buildTemplateEntriesForOreDefinition,
+    applyYieldPresentationToEntity,
     ORE_GRADE_VARIANTS,
   },
 };

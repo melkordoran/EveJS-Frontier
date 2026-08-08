@@ -1,0 +1,63 @@
+{
+  "name": "blue.so",
+  "description": "Exact-build manifest-verification patch for the macOS EVE Frontier client.",
+  "build": 3455996,
+  "source": {
+    "size": 13487136,
+    "sha256": "74ae4f80ee5b4be5d41b395b1f1ce83cb13ca3990a479093d38478b746456894",
+    "slices": [
+      {
+        "arch": "x86_64",
+        "offset": 16384,
+        "size": 7021280,
+        "align": 16384,
+        "sha256": "f8d00db1ed524a34310dd56d9cc97c4cf5648d751c690d5c7e192b7dab8ff08e"
+      },
+      {
+        "arch": "arm64",
+        "offset": 7045120,
+        "size": 6442016,
+        "align": 16384,
+        "sha256": "01d8c3fc98a834194c2ebcd7b073509b48e5ee300852bea37ec70955ae0c7af7"
+      }
+    ]
+  },
+  "targetUnsigned": {
+    "size": 13487136,
+    "sha256": "8132b21c388832c70c0ea1f2f7761dd2a757019cf1ab04f88f77b852c9d42e9e",
+    "slices": [
+      {
+        "arch": "x86_64",
+        "offset": 16384,
+        "size": 7021280,
+        "align": 16384,
+        "sha256": "a942ec5b5b0bb26b1bc43119d997ecfbc666c744cbc44c128c9ac6ef21327122"
+      },
+      {
+        "arch": "arm64",
+        "offset": 7045120,
+        "size": 6442016,
+        "align": 16384,
+        "sha256": "22b9146de357cf3cc9673a1b79b855b1160834006e709526dd05eaa72b1f298a"
+      }
+    ]
+  },
+  "patches": [
+    {
+      "arch": "x86_64",
+      "offset": 4670783,
+      "offsetHex": "0x0047453F",
+      "description": "VerifySignature result normalization: setne (%rax) to movb $1,(%rax)",
+      "beforeHex": "0f9500",
+      "afterHex": "c60001"
+    },
+    {
+      "arch": "arm64",
+      "offset": 4111240,
+      "offsetHex": "0x003EBB88",
+      "description": "VerifySignature result normalization: cset w8, ne to mov w8, #1",
+      "beforeHex": "e8079f1a",
+      "afterHex": "28008052"
+    }
+  ]
+}

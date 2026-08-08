@@ -671,6 +671,67 @@ function createDestinyMovementSimulator(deps = {}) {
     return applyDesiredVelocity(entity, desiredDirection, desiredSpeed, deltaSeconds);
   }
 
+  function advanceManualFlightTarget(entity, deltaSeconds) {
+    if (
+      !entity ||
+      entity.manualFlightActive !== true ||
+      entity.mode !== "GOTO"
+    ) {
+      return false;
+    }
+
+    const delta = Math.max(0, toFiniteNumber(deltaSeconds, 0));
+    const currentDirection = normalizeVector(entity.direction, DEFAULT_RIGHT);
+    const maxAngularSpeed = Math.max(
+      0,
+      toFiniteNumber(entity.maxAngularSpeed, 0.25),
+    );
+    const pitchTarget = clamp(
+      toFiniteNumber(entity.manualPitch, 0),
+      -1,
+      1,
+    ) * (Math.PI / 2);
+    const currentPitch = Math.asin(clamp(currentDirection.y, -1, 1));
+    const maximumPitchStep = maxAngularSpeed * delta;
+    const pitchError = pitchTarget - currentPitch;
+    const pitchStep = clamp(
+      pitchError,
+      -maximumPitchStep,
+      maximumPitchStep,
+    );
+    const nextPitch = clamp(
+      currentPitch + pitchStep,
+      -(Math.PI / 2),
+      Math.PI / 2,
+    );
+    const currentYaw = Math.atan2(currentDirection.x, currentDirection.z);
+    const yawVelocity = clamp(
+      toFiniteNumber(entity.manualYawRate, 0),
+      -1,
+      1,
+    ) * maxAngularSpeed;
+    const nextYaw = currentYaw + (yawVelocity * delta);
+    const pitchCosine = Math.cos(nextPitch);
+    const commandDirection = normalizeVector({
+      x: Math.sin(nextYaw) * pitchCosine,
+      y: Math.sin(nextPitch),
+      z: Math.cos(nextYaw) * pitchCosine,
+    }, currentDirection);
+
+    entity.manualPitchVelocity = delta > 0 ? pitchStep / delta : 0;
+    entity.manualYawVelocity = yawVelocity;
+    entity.angularVelocity = {
+      x: entity.manualPitchVelocity,
+      y: entity.manualYawVelocity,
+      z: 0,
+    };
+    entity.targetPoint = addVectors(
+      cloneVector(entity.position),
+      scaleVector(commandDirection, 1.0e16),
+    );
+    return true;
+  }
+
   function resolveMissileFollowRange(missileRadius, targetRadius) {
     const resolvedMissileRadius = Math.max(0, toFiniteNumber(missileRadius, 0));
     const resolvedTargetRadius = Math.max(0, toFiniteNumber(targetRadius, 0));
@@ -1156,6 +1217,7 @@ function createDestinyMovementSimulator(deps = {}) {
   }
 
   function advanceMovement(entity, scene, deltaSeconds, now) {
+    advanceManualFlightTarget(entity, deltaSeconds);
     switch (entity.mode) {
       case "STOP":
         return applyDesiredVelocity(entity, entity.direction, 0, deltaSeconds);
@@ -1408,6 +1470,7 @@ function createDestinyMovementSimulator(deps = {}) {
     advanceFollowMovement,
     advanceGotoMovement,
     advanceMissileMovement,
+    advanceManualFlightTarget,
     advanceMovement,
     advanceOrbitMovement,
     applyCarbonAcceleration,

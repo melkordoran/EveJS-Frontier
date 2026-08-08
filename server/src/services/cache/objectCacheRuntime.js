@@ -28,6 +28,10 @@ const cachedObjects = new Map();
 const cachedMethodCalls = new Map();
 const methodCallCachingDetails = new Map();
 
+function isFrontierProfile(compatibilityProfile) {
+  return String(compatibilityProfile || "").trim().toLowerCase() === "frontier";
+}
+
 function buildRawString(value) {
   return {
     type: "rawstr",
@@ -306,7 +310,10 @@ function storeCachedObjectRecord(record) {
   return bucket.records.get(versionKey) || null;
 }
 
-function buildCachedObjectResponse(record) {
+function buildCachedObjectResponse(
+  record,
+  compatibilityProfile = config.clientCompatibilityProfile,
+) {
   return {
     type: "object",
     name: buildRawString("carbon.common.script.net.objectCaching.CachedObject"),
@@ -315,7 +322,12 @@ function buildCachedObjectResponse(record) {
       null,
       record.nodeId,
       record.shared ? 1 : 0,
-      { type: "bytes", value: record.pickle },
+      {
+        type: isFrontierProfile(compatibilityProfile)
+          ? "frontier-bytes"
+          : "bytes",
+        value: record.pickle,
+      },
       record.compressed ? 1 : 0,
       record.objectId,
     ],
@@ -348,9 +360,10 @@ function buildCachedMethodCallResult(result, options = {}) {
     sessionInfo = null,
     sessionInfoValue = undefined,
     proxyCache = false,
+    compatibilityProfile = config.clientCompatibilityProfile,
   } = options;
   const details = buildCacheDetails({ versionCheck, sessionInfo });
-  const rawPickle = marshalEncode(result);
+  const rawPickle = marshalEncode(result, { compatibilityProfile });
   const version = [
     buildSignedLong(currentFileTime()),
     computeSignedAdler32(rawPickle),
@@ -585,7 +598,13 @@ function shouldReturnCacheOkForCachedMethodCall(result, kwargs) {
   return Number(localVersion[1]) === Number(remoteVersion[1]);
 }
 
-function getCachableObjectResponse(shared, objectId, objectVersion, nodeId) {
+function getCachableObjectResponse(
+  shared,
+  objectId,
+  objectVersion,
+  nodeId,
+  compatibilityProfile = config.clientCompatibilityProfile,
+) {
   const objectIdKey = serializeForCacheKey(objectId);
   const bucket = cachedObjects.get(objectIdKey);
   if (!bucket) {
@@ -601,11 +620,14 @@ function getCachableObjectResponse(shared, objectId, objectVersion, nodeId) {
     return null;
   }
 
-  return buildCachedObjectResponse({
-    ...record,
-    shared: Boolean(shared),
-    nodeId: Number(nodeId) || record.nodeId,
-  });
+  return buildCachedObjectResponse(
+    {
+      ...record,
+      shared: Boolean(shared),
+      nodeId: Number(nodeId) || record.nodeId,
+    },
+    compatibilityProfile,
+  );
 }
 
 function describeObjectId(objectId) {

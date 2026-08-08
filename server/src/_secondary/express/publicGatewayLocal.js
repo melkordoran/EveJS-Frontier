@@ -51,6 +51,9 @@ const GATEWAY_INSTANCE_UUID = Buffer.from(
 );
 const ACTIVE_NOTICE_STREAMS = new Map();
 const UNKNOWN_REQUEST_COUNTS = new Map();
+const GRPC_TRAILERS_PROPERTY = Symbol.for(
+  "evejs.publicGateway.grpcTrailers",
+);
 const GRPC_RESPONSE_HEADERS = {
   ":status": 200,
   "content-type": "application/grpc+proto",
@@ -2243,14 +2246,8 @@ function finalizeGrpcStream(stream) {
 }
 
 function initializeGrpcStream(stream) {
+  stream[GRPC_TRAILERS_PROPERTY] = { "grpc-status": "0" };
   stream.respond(GRPC_RESPONSE_HEADERS, { waitForTrailers: true });
-  stream.on("wantTrailers", () => {
-    try {
-      stream.sendTrailers({ "grpc-status": "0" });
-    } catch (error) {
-      log.debug(`[PublicGatewayLocal] Failed to send trailers: ${error.message}`);
-    }
-  });
 }
 
 function handleUnaryPing(stream, label) {

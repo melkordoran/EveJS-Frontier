@@ -21,6 +21,12 @@ function clearTrackingState(entity) {
   entity.lastPilotWarpCruiseBumpStamp = null;
   entity.lastPilotWarpMaxSpeedRampIndex = -1;
   entity.lastWarpDiagnosticStamp = null;
+  entity.manualFlightActive = false;
+  entity.manualPitch = null;
+  entity.manualYawRate = 0;
+  entity.manualPitchVelocity = 0;
+  entity.manualYawVelocity = 0;
+  entity.angularVelocity = { x: 0, y: 0, z: 0 };
 }
 
 function shouldRetireFleetWarpAssociation(entity) {

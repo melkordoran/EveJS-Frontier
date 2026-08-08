@@ -1638,6 +1638,15 @@ const CONFIG_ENTRY_DEFINITIONS = [
     validValues: 'Host name or IP string such as "127.0.0.1" or "203.0.113.10".',
   },
   {
+    key: "marketDaemonEnabled",
+    defaultValue: true,
+    envVar: "EVEJS_MARKET_DAEMON_ENABLED",
+    envType: "boolean",
+    description:
+      "Enables the external market daemon connection and expiry poller.",
+    validValues: "true or false.",
+  },
+  {
     key: "marketDaemonHost",
     defaultValue: "127.0.0.1",
     envVar: "EVEJS_MARKET_DAEMON_HOST",

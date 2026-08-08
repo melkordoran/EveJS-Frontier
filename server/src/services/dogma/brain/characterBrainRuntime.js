@@ -6,8 +6,8 @@ const {
   buildList,
 } = require(path.join(__dirname, "../../_shared/serviceHelpers"));
 const {
-  marshalEncode,
-} = require(path.join(__dirname, "../../../network/tcp/utils/marshal"));
+  encodeCharacterBrainEffectLists,
+} = require(path.join(__dirname, "./characterBrainCompatibility"));
 const {
   FITTING_BRAIN_PROVIDER,
 } = require(path.join(__dirname, "./providers/fittingBrainProvider"));
@@ -227,11 +227,12 @@ function buildCharacterBrainGrayMatter(characterID, options = {}) {
     buildBrainEffectObject(targets.structureID, effectDefinition),
   );
 
-  return marshalEncode([
-    { type: "list", items: charEffects },
-    { type: "list", items: shipEffects },
-    { type: "list", items: structureEffects },
-  ]);
+  return encodeCharacterBrainEffectLists(
+    charEffects,
+    shipEffects,
+    structureEffects,
+    options.compatibilityProfile,
+  );
 }
 
 function buildCharacterBrainUpdatePayload(characterID, version = null, options = {}) {
@@ -268,6 +269,8 @@ function syncCharacterDogmaBrain(session, characterID = null, options = {}) {
       session.structureid ??
       session.structureID ??
       session.structureId,
+    compatibilityProfile:
+      options.compatibilityProfile ?? session.compatibilityProfile,
   });
   if (!payload) {
     return false;
@@ -299,6 +302,8 @@ function syncCharacterDogmaState(session, characterID = null, options = {}) {
       ? false
       : syncCharacterDogmaBrain(session, characterID, {
           idType: options.brainIdType,
+          compatibilityProfile:
+            options.compatibilityProfile ?? session.compatibilityProfile,
         });
   return syncedProviderState || syncedBrain;
 }

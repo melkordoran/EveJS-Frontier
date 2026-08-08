@@ -7,6 +7,10 @@ const path = require("path");
 const database = require(path.join(__dirname, "../../gameStore"));
 const BaseService = require(path.join(__dirname, "../baseService"));
 const {
+  normalizeActivationStateForProfile,
+  normalizeInfoAttributesForProfile,
+} = require(path.join(__dirname, "./dogmaInfoCompatibility"));
+const {
   resolveSessionCharacterID,
 } = require(path.join(__dirname, "../_shared/sessionIdentity"));
 const log = require(path.join(__dirname, "../../utils/logger"));
@@ -229,6 +233,10 @@ const {
   repairShipAndFittedItemsForSession,
   resolveRookieShipTypeID,
 } = require(path.join(__dirname, "../ship/rookieShipRuntime"));
+const {
+  getShipFuelCharge,
+  loadFuelIntoShipTank,
+} = require(path.join(__dirname, "../frontier/fuelTankRuntime"));
 const worldData = require(path.join(__dirname, "../../space/worldData"));
 const spaceRuntime = require(path.join(__dirname, "../../space/runtime"));
 const {
@@ -306,6 +314,11 @@ const ATTRIBUTE_POWER_LOAD = getAttributeIDByNames("powerLoad") || 15;
 const ATTRIBUTE_CPU_LOAD = getAttributeIDByNames("cpuLoad") || 49;
 const ATTRIBUTE_CAPACITOR_CAPACITY =
   getAttributeIDByNames("capacitorCapacity") || 482;
+// Frontier fuel tank: `fuelCharge` is the current level in fuel units, read
+// by the HUD/station fuel widgets from the godma ship item next to
+// `fuelCapacity` (Creation FuelCapacityAdd total, e.g. 2,250).
+const ATTRIBUTE_FUEL_CAPACITY = getAttributeIDByNames("fuelCapacity") || 5633;
+const ATTRIBUTE_FUEL_CHARGE = getAttributeIDByNames("fuelCharge") || 5635;
 const ATTRIBUTE_MAX_LOCKED_TARGETS =
   getAttributeIDByNames("maxLockedTargets") || 192;
 const ATTRIBUTE_QUANTITY = getAttributeIDByNames("quantity") || 805;
@@ -924,6 +937,94 @@ function resolveMaxGroupOnlineLimit(moduleItem, fittedItems = []) {
     limitingTypeID,
   };
 }
+
+function resolveFrontierCreationDogmaContext(shipMetadata, charID, session) {
+  if (
+    String(session && session.compatibilityProfile || "").trim().toLowerCase() !==
+      "frontier" ||
+    !shipMetadata ||
+    Number(shipMetadata.itemID) <= 0 ||
+    Number(charID) <= 0
+  ) {
+    return null;
+  }
+
+  const { getCreationTemplate } = require(path.join(
+    __dirname,
+    "../frontier/creationStaticData",
+  ));
+  if (!getCreationTemplate(shipMetadata.typeID)) {
+    return null;
+  }
+
+  const { getCreationDogmaContext } = require(path.join(
+    __dirname,
+    "../frontier/creationRuntime",
+  ));
+  const result = getCreationDogmaContext(shipMetadata, charID);
+  if (!result || result.success !== true) {
+    log.warn(
+      `[DogmaIM] Creation hydration failed ship=${Number(shipMetadata.itemID) || 0} ` +
+      `type=${Number(shipMetadata.typeID) || 0} ` +
+      `reason=${result && result.errorMsg || "UNKNOWN"}`,
+    );
+    return null;
+  }
+  return result.data;
+}
+
+function setFrontierCreationModuleOnlineStateIfHandled(
+  shipMetadata,
+  charID,
+  moduleID,
+  online,
+  session,
+  dependencies = {},
+) {
+  if (
+    String(session && session.compatibilityProfile || "").trim().toLowerCase() !==
+      "frontier" ||
+    !shipMetadata ||
+    Number(shipMetadata.itemID) <= 0 ||
+    Number(charID) <= 0
+  ) {
+    return { handled: false, result: null };
+  }
+
+  const getCreationTemplate =
+    typeof dependencies.getCreationTemplate === "function"
+      ? dependencies.getCreationTemplate
+      : require(path.join(
+          __dirname,
+          "../frontier/creationStaticData",
+        )).getCreationTemplate;
+  if (!getCreationTemplate(shipMetadata.typeID)) {
+    return { handled: false, result: null };
+  }
+
+  const setCreationModuleOnlineState =
+    typeof dependencies.setCreationModuleOnlineState === "function"
+      ? dependencies.setCreationModuleOnlineState
+      : require(path.join(
+          __dirname,
+          "../frontier/creationRuntime",
+        )).setCreationModuleOnlineState;
+  const result = setCreationModuleOnlineState(
+    shipMetadata,
+    charID,
+    moduleID,
+    online,
+    session,
+  );
+  return {
+    handled: true,
+    result: result || {
+      success: false,
+      errorMsg: "CREATION_MODULE_ABILITY_NOT_FOUND",
+    },
+  };
+}
+
 class DogmaService extends BaseService {
   constructor() {
     super("dogmaIM");
@@ -1559,12 +1660,17 @@ class DogmaService extends BaseService {
       // semantics at the 100ns FILETIME precision used by the wire payload.
       wallclockTime = time - 1n;
     }
+    const resolvedAttributes = normalizeInfoAttributesForProfile(
+      attributes || { type: "dict", entries: [] },
+      time,
+      session && session.compatibilityProfile,
+    );
     const entries = [
       ["itemID", itemID],
       ["invItem", resolvedInvItem],
       ["activeEffects", activeEffects || { type: "dict", entries: [] }],
       ["time", time],
-      ["attributes", attributes || { type: "dict", entries: [] }],
+      ["attributes", resolvedAttributes],
       ["wallclockTime", wallclockTime],
     ];
     return {
@@ -2434,6 +2540,21 @@ class DogmaService extends BaseService {
     const attributes = fittingSnapshot
       ? { ...fittingSnapshot.shipAttributes }
       : {};
+    const creationDogmaContext = Object.prototype.hasOwnProperty.call(
+      options,
+      "creationDogmaContext",
+    )
+      ? options.creationDogmaContext
+      : resolveFrontierCreationDogmaContext(
+          shipData,
+          numericCharID,
+          session,
+        );
+    const creationShipAttributeModifierEntries =
+      creationDogmaContext &&
+      Array.isArray(creationDogmaContext.shipAttributeModifierEntries)
+        ? creationDogmaContext.shipAttributeModifierEntries
+        : [];
     const runtimeAttributeOverrides = this._getShipRuntimeAttributeOverrides(
       session,
       shipData,
@@ -2490,6 +2611,12 @@ class DogmaService extends BaseService {
         runtimeAttributeOverrides.scanResolution,
       );
     }
+    // The space entity does not yet model flagCreationFitting modules. Treat
+    // its passive snapshot as the base, then add the Creation layout so stale
+    // zeroes in the scene cannot erase capacities contributed by those parts.
+    if (creationShipAttributeModifierEntries.length > 0) {
+      applyModifierGroups(attributes, creationShipAttributeModifierEntries);
+    }
     const shieldCapacity = Number(attributes[ATTRIBUTE_SHIELD_CAPACITY]);
     if (
       Number.isFinite(shieldCapacity) &&
@@ -2524,6 +2651,16 @@ class DogmaService extends BaseService {
     ) {
       attributes[ATTRIBUTE_CHARGE] = Number(
         (capacitorCapacity * shipCondition.charge).toFixed(6),
+      );
+    }
+    // Frontier parity: surface the persisted fuel tank level (absolute units,
+    // clamped to the derived capacity) so the fuel widgets read a live
+    // numerator the same way the capacitor gauge reads attribute 18.
+    const fuelCapacity = Number(attributes[ATTRIBUTE_FUEL_CAPACITY]);
+    if (Number.isFinite(fuelCapacity) && fuelCapacity > 0) {
+      attributes[ATTRIBUTE_FUEL_CHARGE] = Math.min(
+        getShipFuelCharge(shipData),
+        fuelCapacity,
       );
     }
     attributes[ATTRIBUTE_PILOT_SECURITY_STATUS] = Number.isFinite(securityStatus)
@@ -3132,8 +3269,11 @@ class DogmaService extends BaseService {
       return this._buildEmptyDict();
     }
     const entries = [];
-    if (isEffectivelyOnlineModule(item)) {
-      const onlineEntry = this._buildActiveEffectEntry(item, EFFECT_ONLINE, {
+    if (options.forceOnline === true || isEffectivelyOnlineModule(item)) {
+      const onlineEffectID = Number(options.onlineEffectID) > 0
+        ? Number(options.onlineEffectID)
+        : EFFECT_ONLINE;
+      const onlineEntry = this._buildActiveEffectEntry(item, onlineEffectID, {
         ownerID: options.controlledStructure === true
           ? null
           : Number(item.ownerID) || 0,
@@ -3248,6 +3388,14 @@ class DogmaService extends BaseService {
     options = {},
   ) {
     const inventoryEntries = [];
+    const creationModuleItems = Array.isArray(options.creationModuleItems)
+      ? options.creationModuleItems.filter(Boolean)
+      : [];
+    const creationModuleItemIDs = new Set(
+      creationModuleItems
+        .map((item) => Number(item && item.itemID) || 0)
+        .filter((itemID) => itemID > 0),
+    );
     const listFittedRows = (chargeRows = false) => {
       if (
         this._isFittingContextMatch(
@@ -3275,11 +3423,26 @@ class DogmaService extends BaseService {
         : getFittedModuleItems(charID, shipID);
     };
     if (options.includeFittedItems !== false) {
-      const fittedItems = listFittedRows(false);
+      const seenItemIDs = new Set();
+      const standardFittedItems = listFittedRows(false);
+      const fittedItems = [
+        ...(Array.isArray(standardFittedItems) ? standardFittedItems : []),
+        ...creationModuleItems,
+      ].filter((item) => {
+        const itemID = Number(item && item.itemID) || 0;
+        if (itemID <= 0 || seenItemIDs.has(itemID)) {
+          return false;
+        }
+        seenItemIDs.add(itemID);
+        return true;
+      });
       if (Array.isArray(fittedItems)) {
         for (const item of fittedItems) {
           const hasDynamicStructureServiceAttributes = isStructureServiceModuleItem(item);
-          const cachedEntry = hasDynamicStructureServiceAttributes
+          const isCreationModuleItem = creationModuleItemIDs.has(
+            Number(item && item.itemID) || 0,
+          );
+          const cachedEntry = hasDynamicStructureServiceAttributes || isCreationModuleItem
             ? null
             : this._getCachedDockedItemInfoEntry(
                 session,
@@ -3309,6 +3472,11 @@ class DogmaService extends BaseService {
                 session,
                 {
                   controlledStructure: options.controlledStructure === true,
+                  forceOnline:
+                    isCreationModuleItem &&
+                    item.moduleState &&
+                    item.moduleState.online === true,
+                  onlineEffectID: isCreationModuleItem ? 16 : null,
                 },
               ),
               attributes: this._buildInventoryItemAttributeDict(item, session, {
@@ -3322,7 +3490,7 @@ class DogmaService extends BaseService {
             item.itemID,
             entry,
           ]);
-          if (!hasDynamicStructureServiceAttributes) {
+          if (!hasDynamicStructureServiceAttributes && !isCreationModuleItem) {
             this._cacheDockedItemInfoEntry(session, item.itemID, item, entry);
           }
         }
@@ -5066,14 +5234,17 @@ class DogmaService extends BaseService {
     return context.chargeByFlag.get(Number(flagID) || 0) || null;
   }
   _buildActivationState(charID, shipID, shipRecord = null, options = {}) {
-    return [
-      this._buildShipState(charID, shipID, shipRecord, options),
-      options.includeCharges === false
-        ? this._buildEmptyDict()
-        : this._buildChargeStateDict(charID, shipID, options),
-      buildWeaponBankStateDict(shipID, { characterID: charID }),
-      buildActivationHeatStateDict(currentFileTime()),
-    ];
+    return normalizeActivationStateForProfile(
+      [
+        this._buildShipState(charID, shipID, shipRecord, options),
+        options.includeCharges === false
+          ? this._buildEmptyDict()
+          : this._buildChargeStateDict(charID, shipID, options),
+        buildWeaponBankStateDict(shipID, { characterID: charID }),
+        buildActivationHeatStateDict(currentFileTime()),
+      ],
+      options.compatibilityProfile,
+    );
   }
   _getCharacterItemLocationID(session, options = {}) {
     const allowShipLocation = options.allowShipLocation !== false;
@@ -5085,13 +5256,18 @@ class DogmaService extends BaseService {
     }
     return this._getShipID(session);
   }
-  _buildCharacterInfoDict(charID, charData, locationID) {
+  _buildCharacterInfoDict(charID, charData, locationID, session = null) {
     return {
       type: "dict",
-      entries: this._buildCharacterInfoEntries(charID, charData, locationID),
+      entries: this._buildCharacterInfoEntries(
+        charID,
+        charData,
+        locationID,
+        session,
+      ),
     };
   }
-  _buildCharacterInfoEntries(charID, charData, locationID) {
+  _buildCharacterInfoEntries(charID, charData, locationID, session = null) {
     return [
       [
         charID,
@@ -5108,6 +5284,7 @@ class DogmaService extends BaseService {
           stacksize: 1,
           description: "character",
           attributes: this._buildCharacterAttributeDict(charData, charID),
+          session,
         }),
       ],
     ];
@@ -5283,6 +5460,80 @@ class DogmaService extends BaseService {
     this._notifyModuleAttributeChanges(session, changes);
     return changes.length;
   }
+  _queuePostGetAllInfoCreationAttributeRefresh(
+    session,
+    charID,
+    shipID,
+    shipAttributes = {},
+    creationDogmaContext = null,
+  ) {
+    if (!session || !session._space) {
+      return 0;
+    }
+    const numericCharID = Number(charID) || this._getCharID(session);
+    const numericShipID = Number(shipID) || this._getShipID(session);
+    const modifierEntries = creationDogmaContext && Array.isArray(
+      creationDogmaContext.shipAttributeModifierEntries,
+    )
+      ? creationDogmaContext.shipAttributeModifierEntries
+      : [];
+    if (numericCharID <= 0 || numericShipID <= 0 || modifierEntries.length === 0) {
+      delete session._space.pendingDogmaGetAllInfoCreationAttributeRefresh;
+      return 0;
+    }
+
+    const attributeIDs = new Set(
+      modifierEntries
+        .map((entry) => Number(entry && entry.modifiedAttributeID))
+        .filter((attributeID) => Number.isInteger(attributeID) && attributeID > 0),
+    );
+    if (attributeIDs.has(ATTRIBUTE_CAPACITOR_CAPACITY)) {
+      attributeIDs.add(ATTRIBUTE_CHARGE);
+    }
+    if (attributeIDs.has(ATTRIBUTE_FUEL_CAPACITY)) {
+      attributeIDs.add(ATTRIBUTE_FUEL_CHARGE);
+    }
+    const when = this._sessionFileTime(session);
+    const changes = [...attributeIDs]
+      .sort((left, right) => left - right)
+      .map((attributeID) => ({
+        attributeID,
+        value: Number(shipAttributes && shipAttributes[attributeID]),
+      }))
+      .filter(({ value }) => Number.isFinite(value))
+      .map(({ attributeID, value }) => [
+        "OnModuleAttributeChange",
+        numericCharID,
+        numericShipID,
+        attributeID,
+        when,
+        value,
+        0,
+        null,
+      ]);
+    if (changes.length === 0) {
+      delete session._space.pendingDogmaGetAllInfoCreationAttributeRefresh;
+      return 0;
+    }
+    session._space.pendingDogmaGetAllInfoCreationAttributeRefresh = changes;
+    return changes.length;
+  }
+  _flushPostGetAllInfoCreationAttributeRefresh(session) {
+    if (!session || !session._space) {
+      return 0;
+    }
+    const changes = Array.isArray(
+      session._space.pendingDogmaGetAllInfoCreationAttributeRefresh,
+    )
+      ? session._space.pendingDogmaGetAllInfoCreationAttributeRefresh
+      : [];
+    delete session._space.pendingDogmaGetAllInfoCreationAttributeRefresh;
+    if (changes.length === 0) {
+      return 0;
+    }
+    this._notifyModuleAttributeChanges(session, changes);
+    return changes.length;
+  }
   _shouldIncludeLoginShipInfoLoadedCharges(session) {
     // Docked normal fitting and its warning pass consume the actual loaded
     // charge rows in the module slots. Keep those real charge items in
@@ -5291,7 +5542,7 @@ class DogmaService extends BaseService {
   }
   _buildShipState(charID, shipID, shipRecord = null, options = {}) {
     const shipCondition = getShipConditionState(shipRecord);
-    const fittedItems =
+    const standardFittedItems =
       options.includeFittedItems === false
         ? []
         : this._isFittingContextMatch(
@@ -5310,6 +5561,28 @@ class DogmaService extends BaseService {
               (Number(left && left.itemID) || 0) - (Number(right && right.itemID) || 0)
             ))
           : getFittedModuleItems(charID, shipID);
+    const creationModuleItems = options.includeFittedItems === false
+      ? []
+      : (Array.isArray(options.creationModuleItems)
+        ? options.creationModuleItems.filter(Boolean)
+        : []);
+    const creationModuleItemIDs = new Set(
+      creationModuleItems
+        .map((item) => Number(item && item.itemID) || 0)
+        .filter((itemID) => itemID > 0),
+    );
+    const seenItemIDs = new Set();
+    const fittedItems = [
+      ...(Array.isArray(standardFittedItems) ? standardFittedItems : []),
+      ...creationModuleItems,
+    ].filter((item) => {
+      const itemID = Number(item && item.itemID) || 0;
+      if (itemID <= 0 || seenItemIDs.has(itemID)) {
+        return false;
+      }
+      seenItemIDs.add(itemID);
+      return true;
+    });
     return {
       type: "dict",
       entries: [
@@ -5332,10 +5605,18 @@ class DogmaService extends BaseService {
             skillPoints: getCharacterSkillPointTotal(charID) || 0,
           }),
         ],
-        ...fittedItems.map((item) => [
-          item.itemID,
-          this._buildPackedInstanceRow(buildModuleStatusSnapshot(item)),
-        ]),
+        ...fittedItems.map((item) => {
+          const snapshot = buildModuleStatusSnapshot(item);
+          if (creationModuleItemIDs.has(Number(item && item.itemID) || 0)) {
+            snapshot.online = Boolean(
+              item && item.moduleState && item.moduleState.online === true,
+            );
+          }
+          return [
+            item.itemID,
+            this._buildPackedInstanceRow(snapshot),
+          ];
+        }),
       ],
     };
   }
@@ -7229,6 +7510,28 @@ class DogmaService extends BaseService {
         errorMsg: "MODULE_NOT_FOUND",
       };
     }
+    const shipRecord =
+      findCharacterShip(charID, numericShipID) ||
+      structureShipRecord ||
+      this._getActiveShipRecord(session) ||
+      null;
+    const creationToggle = setFrontierCreationModuleOnlineStateIfHandled(
+      shipRecord,
+      charID,
+      numericModuleID,
+      Boolean(online),
+      session,
+    );
+    if (creationToggle.handled) {
+      const creationResult = creationToggle.result;
+      log.debug(
+        `[DogmaIM] SetModuleOnlineState Creation bridge shipID=${numericShipID} ` +
+        `moduleID=${numericModuleID} online=${Boolean(online)} ` +
+        `accepted=${creationResult && creationResult.success === true} ` +
+        `error=${creationResult && creationResult.errorMsg || "none"}`,
+      );
+      return creationResult;
+    }
     const previousOnline = isEffectivelyOnlineModule(moduleItem);
     const nextOnline = Boolean(online);
     const inSpace = Boolean(session && session._space);
@@ -7244,11 +7547,6 @@ class DogmaService extends BaseService {
         });
       }
     }
-    const shipRecord =
-      findCharacterShip(charID, numericShipID) ||
-      structureShipRecord ||
-      this._getActiveShipRecord(session) ||
-      null;
     const shipStateSource = shipRecord || {
       itemID: numericShipID,
       typeID: this._getShipTypeID(session),
@@ -8874,6 +9172,170 @@ class DogmaService extends BaseService {
     }
     return null;
   }
+  // Frontier: LoadFuel(shipID, fuelTypeID, quantity, fuelItems, locationID).
+  // The client discards the return value; success is communicated by the
+  // source-stack inventory updates plus the fuelCharge attribute change.
+  Handle_LoadFuel(args, session) {
+    const shipID = Number(args && args[0]) || 0;
+    const fuelTypeID = Number(args && args[1]) || 0;
+    const quantity = Number(args && args[2]) || 0;
+    const fuelItems = args && args[3] != null ? unwrapMarshalValue(args[3]) : null;
+    const sourceLocationID = args && args[4] != null
+      ? Number(unwrapMarshalValue(args[4])) || 0
+      : 0;
+    const charID = this._getCharID(session);
+    log.info(
+      `[DogmaIM] LoadFuel ship=${shipID} type=${fuelTypeID} qty=${quantity} ` +
+      `items=${Array.isArray(fuelItems) ? fuelItems.length : "null"} ` +
+      `sourceLocation=${sourceLocationID || "null"} char=${charID}`,
+    );
+
+    if (this._isControllingStructureSession(session)) {
+      this._throwCustomNotifyUserError(
+        "Structures cannot load ship fuel.",
+      );
+    }
+    const shipContext = this._getCurrentDogmaShipContext(session);
+    if (!shipContext.shipRecord || Number(shipContext.shipID) !== shipID) {
+      this._throwCustomNotifyUserError(
+        "Only the active ship can take on fuel.",
+      );
+    }
+
+    // The bind negotiation can replay the same logical request as a nested
+    // MachoBindObject call plus an immediate direct call on the fresh bound
+    // object. Treat an identical request arriving within the window as the
+    // same action instead of loading twice.
+    const requestKey = [
+      charID,
+      shipID,
+      fuelTypeID,
+      quantity,
+      JSON.stringify(fuelItems, (key, value) =>
+        typeof value === "bigint" ? value.toString() : value),
+      sourceLocationID,
+    ].join("|");
+    const nowMs = Date.now();
+    const lastRequest = session && session._lastLoadFuelRequest;
+    if (
+      lastRequest &&
+      lastRequest.key === requestKey &&
+      nowMs - lastRequest.atMs < 2000
+    ) {
+      log.info(
+        `[DogmaIM] LoadFuel duplicate request suppressed ship=${shipID} ` +
+        `type=${fuelTypeID} qty=${quantity} ageMs=${nowMs - lastRequest.atMs}`,
+      );
+      return null;
+    }
+
+    const charData = this._getCharacterRecord(session) || {};
+    const creationDogmaContext = resolveFrontierCreationDogmaContext(
+      shipContext.shipMetadata,
+      charID,
+      session,
+    );
+    const shipAttributes = this._buildShipAttributes(
+      charData,
+      shipContext.shipMetadata,
+      session,
+      { creationDogmaContext },
+    );
+    const fuelCapacity =
+      Number(shipAttributes && shipAttributes[ATTRIBUTE_FUEL_CAPACITY]) || 0;
+
+    const loadResult = loadFuelIntoShipTank({
+      characterID: charID,
+      shipID,
+      fuelTypeID,
+      quantity,
+      fuelItems,
+      sourceLocationID,
+      fuelCapacity,
+      dockedLocationID: getDockedLocationID(session) || 0,
+    });
+    if (!loadResult.success) {
+      log.info(
+        `[DogmaIM] LoadFuel rejected ship=${shipID} type=${fuelTypeID} ` +
+        `qty=${quantity} error=${loadResult.errorMsg}`,
+      );
+      this._throwCustomNotifyUserError(
+        this._formatLoadFuelUserError(loadResult, fuelTypeID),
+      );
+    }
+    if (session) {
+      session._lastLoadFuelRequest = { key: requestKey, atMs: nowMs };
+    }
+
+    const { previousFuelCharge, nextFuelCharge, changes } = loadResult.data;
+    // Keep a live space entity's condition copy coherent so later
+    // entity-side persists cannot roll the tank level back.
+    this._syncSpaceEntityFuelCharge(session, shipID, nextFuelCharge);
+    this._syncInventoryChanges(session, changes);
+    const when = this._sessionFileTime(session);
+    this._notifyModuleAttributeChanges(session, [[
+      "OnModuleAttributeChange",
+      charID,
+      shipID,
+      ATTRIBUTE_FUEL_CHARGE,
+      when,
+      nextFuelCharge,
+      previousFuelCharge,
+      null,
+    ]]);
+    log.info(
+      `[DogmaIM] LoadFuel loaded ship=${shipID} type=${fuelTypeID} ` +
+      `qty=${quantity} fuelCharge=${previousFuelCharge}->${nextFuelCharge}/${fuelCapacity}`,
+    );
+    return null;
+  }
+  _formatLoadFuelUserError(loadResult, fuelTypeID) {
+    const params = (loadResult && loadResult.params) || {};
+    switch (String(loadResult && loadResult.errorMsg || "")) {
+      case "FUEL_SHIP_NOT_FOUND":
+      case "FUEL_SHIP_NOT_OWNED":
+        return "That ship cannot take on fuel right now.";
+      case "FUEL_QUANTITY_INVALID":
+        return "The fuel amount must be a positive number of units.";
+      case "FUEL_TYPE_UNSUPPORTED":
+        return "That item cannot be loaded as fuel.";
+      case "FUEL_TANK_MISSING":
+        return "This ship has no fuel tank to load fuel into.";
+      case "FUEL_TANK_OVERFLOW": {
+        const remainingCapacity = Number(params.remainingCapacity);
+        return Number.isFinite(remainingCapacity) && remainingCapacity > 0
+          ? `The fuel tank can only take ${remainingCapacity} more units.`
+          : "The fuel tank is already full.";
+      }
+      case "FUEL_SOURCE_INSUFFICIENT": {
+        const availableQuantity = Number(params.availableQuantity);
+        return Number.isFinite(availableQuantity) && availableQuantity > 0
+          ? `Only ${availableQuantity} units of that fuel are available to load.`
+          : "There is no matching fuel available to load.";
+      }
+      default:
+        return "The fuel could not be loaded.";
+    }
+  }
+  _syncSpaceEntityFuelCharge(session, shipID, nextFuelCharge) {
+    if (!spaceRuntime || typeof spaceRuntime.getEntity !== "function") {
+      return false;
+    }
+    let entity = null;
+    try {
+      entity = spaceRuntime.getEntity(session, shipID);
+    } catch (_) {
+      return false;
+    }
+    if (!entity || !entity.conditionState) {
+      return false;
+    }
+    entity.conditionState = {
+      ...entity.conditionState,
+      fuelCharge: Math.max(0, Number(nextFuelCharge) || 0),
+    };
+    return true;
+  }
   Handle_GetAllInfo(args, session) {
     log.debug("[DogmaIM] GetAllInfo");
     const startedAtMs = Date.now();
@@ -8904,6 +9366,13 @@ class DogmaService extends BaseService {
       args && args[2],
       Boolean(session && (session.structureid || session.structureID)),
     );
+    const creationDogmaContext = (
+      getShipInfo && !shipContext.controllingStructure
+    ) ? resolveFrontierCreationDogmaContext(shipMetadata, charID, session) : null;
+    const creationModuleItems = creationDogmaContext &&
+      Array.isArray(creationDogmaContext.moduleItems)
+      ? creationDogmaContext.moduleItems
+      : [];
     let fittingContext = null;
     const getFittingContext = () => {
       if (!getShipInfo) {
@@ -8993,6 +9462,12 @@ class DogmaService extends BaseService {
     const dockedStructureRecord = getStructureInfo
       ? this._getDockedStructureRecord(session)
       : null;
+    const shipAttributeValues = getShipInfo && !shipContext.controllingStructure
+      ? this._buildShipAttributes(charData, shipMetadata, session, {
+          fittingContext,
+          creationDogmaContext,
+        })
+      : null;
     const shipInfoEntry = getShipInfo
       ? (
         this._getCachedDockedItemInfoEntry(session, shipID, shipMetadata) ||
@@ -9029,9 +9504,7 @@ class DogmaService extends BaseService {
                 fittingContext,
                 includeQuantityAttribute: false,
               })
-            : this._buildShipAttributeDict(charData, shipMetadata, session, {
-                fittingContext,
-              }),
+            : this._buildAttributeValueDict(shipAttributeValues || {}),
           session,
         })
       )
@@ -9054,6 +9527,7 @@ class DogmaService extends BaseService {
             controlledStructure: shipContext.controllingStructure,
             includeFittedItemQuantityAttribute: !shipContext.controllingStructure,
             fittingContext,
+            creationModuleItems,
           },
         )
       : [];
@@ -9072,10 +9546,22 @@ class DogmaService extends BaseService {
     } else if (session && session._space) {
       delete session._space.pendingDogmaGetAllInfoChargeQuantityRefresh;
     }
+    if (getShipInfo && !shipContext.controllingStructure) {
+      this._queuePostGetAllInfoCreationAttributeRefresh(
+        session,
+        charID,
+        shipID,
+        shipAttributeValues,
+        creationDogmaContext,
+      );
+    } else if (session && session._space) {
+      delete session._space.pendingDogmaGetAllInfoCreationAttributeRefresh;
+    }
     log.debug(
       `[DogmaIM] GetAllInfo shipInfo entries=${shipInventoryInfoEntries.length} ` +
       `tupleCharges=${shipInfoTupleChargeEntries} ` +
       `loadedCharges=${includeLoginShipInfoLoadedCharges ? 1 : 0} ` +
+      `creationModules=${creationModuleItems.length} ` +
       `deferredFitting=${deferLoginShipFittingBootstrap ? 1 : 0} ` +
       `loginTuplePrime=${primeLoginShipInfoChargeSublocations ? 1 : 0} ` +
       `docked=${isDockedSession(session) ? 1 : 0}`,
@@ -9098,10 +9584,12 @@ class DogmaService extends BaseService {
               includeFittedItems: !deferLoginShipFittingBootstrap,
               includeAllFittingOwners: shipContext.controllingStructure,
               fittingContext,
+              creationModuleItems,
               includeCharges:
                 shipContext.controllingStructure
                   ? true
                   : !isDockedSession(session),
+              compatibilityProfile: session && session.compatibilityProfile,
             })
           : null,
       ],
@@ -9163,6 +9651,7 @@ class DogmaService extends BaseService {
                     charID,
                     charData,
                     characterLocationID,
+                    session,
                   ),
                   // The client seeds charBrain exclusively from charInfo, and without it
                   // docked MakeShipActive later crashes in RemoveBrainEffects while switching ships.
@@ -9266,7 +9755,12 @@ class DogmaService extends BaseService {
     const charID = this._getCharID(session);
     const charData = this._getCharacterRecord(session) || {};
     const characterLocationID = this._getCharacterItemLocationID(session);
-    return this._buildCharacterInfoDict(charID, charData, characterLocationID);
+    return this._buildCharacterInfoDict(
+      charID,
+      charData,
+      characterLocationID,
+      session,
+    );
   }
   Handle_ItemGetInfo(args, session) {
     const requestedItemID = args && args.length > 0 ? args[0] : this._getShipID(session);
@@ -9624,6 +10118,9 @@ class DogmaService extends BaseService {
       ATTRIBUTE_SHIELD_CHARGE_HELPER,
       ATTRIBUTE_POWER_LOAD,
       ATTRIBUTE_CPU_LOAD,
+      // Absent (undefined) for non-Frontier hulls without a fuel tank, so the
+      // finite-value guard below keeps this profile-scoped.
+      ATTRIBUTE_FUEL_CHARGE,
     ];
 
     for (const attributeID of shipAttributeIDs) {
@@ -9708,6 +10205,7 @@ class DogmaService extends BaseService {
       return;
     }
     this._flushPostGetAllInfoChargeQuantityRefresh(session);
+    this._flushPostGetAllInfoCreationAttributeRefresh(session);
     this._sendPostUndockDogmaMultiEvent(session);
     syncCharacterDogmaState(session, this._getCharID(session));
   }
@@ -9743,6 +10241,7 @@ DogmaService.resolveNewbieShipTypeIDForSession = resolveNewbieShipTypeID;
 DogmaService.repairShipAndFittedItemsForSession = repairShipAndFittedItemsForSession;
 DogmaService._testing = {
   flushPendingModuleReloads: DogmaService.flushPendingModuleReloads,
+  setFrontierCreationModuleOnlineStateIfHandled,
   getPendingModuleReloads() {
     return pendingModuleReloads;
   },

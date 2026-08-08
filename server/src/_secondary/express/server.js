@@ -14,6 +14,9 @@ const {
 
 let gatewayStreamHandler = null;
 let mapTagsCdnAssetResolver = null;
+const GRPC_TRAILERS_PROPERTY = Symbol.for(
+  "evejs.publicGateway.grpcTrailers",
+);
 
 function getGatewayStreamHandler() {
   if (!gatewayStreamHandler) {
@@ -712,6 +715,12 @@ function createLocalSecureResponder(httpsPort, bindHost) {
     });
 
     if (contentType.includes("application/grpc")) {
+      stream[GRPC_TRAILERS_PROPERTY] = {
+        "grpc-status": "12",
+        "grpc-message": encodeURIComponent(
+          `EveJS Elysian local gateway has no handler for ${routePath}`,
+        ),
+      };
       stream.respond(
         {
           ":status": 200,
@@ -721,18 +730,6 @@ function createLocalSecureResponder(httpsPort, bindHost) {
         },
         { waitForTrailers: true },
       );
-      stream.on("wantTrailers", () => {
-        try {
-          stream.sendTrailers({
-            "grpc-status": "12",
-            "grpc-message": encodeURIComponent(
-              `EveJS Elysian local gateway has no handler for ${routePath}`,
-            ),
-          });
-        } catch (err) {
-          log.http2Err(`trailer error: ${err.message}`);
-        }
-      });
       stream.end();
       return;
     }
@@ -746,6 +743,10 @@ function createLocalSecureResponder(httpsPort, bindHost) {
 
   secureServer.on("request", (req, res) => {
     if (Number(req.httpVersionMajor || 0) >= 2) {
+      const grpcTrailers = req.stream && req.stream[GRPC_TRAILERS_PROPERTY];
+      if (grpcTrailers && typeof res.addTrailers === "function") {
+        res.addTrailers(grpcTrailers);
+      }
       return;
     }
 

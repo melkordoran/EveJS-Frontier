@@ -5,6 +5,9 @@ const {
   TABLE,
   readStaticRows,
 } = require(path.join(__dirname, "../../services/_shared/referenceData"));
+const {
+  FRONTIER_SYNTHETIC_RESOURCE_FIELDS_ENABLED,
+} = require(path.join(__dirname, "./frontierResourceFields"));
 
 let cache = null;
 
@@ -49,16 +52,15 @@ function ensureLoaded() {
   if (!cache) {
     cache = buildCache();
     log.info(
-      `[Asteroids] Loaded ${cache.belts.length} asteroid belts and ${cache.fieldStyles.length} field styles`,
+      `[Asteroids] Loaded ${cache.belts.length} authored asteroid belts and ` +
+        `${cache.fieldStyles.length} field styles; synthetic Frontier landscape fields disabled`,
     );
   }
   return cache;
 }
 
 function getBeltsForSystem(systemID) {
-  return [
-    ...(ensureLoaded().beltsBySystem.get(Number(systemID)) || []),
-  ];
+  return [...(ensureLoaded().beltsBySystem.get(Number(systemID)) || [])];
 }
 
 function getBeltByID(itemID) {
@@ -70,6 +72,7 @@ function getFieldStyleByID(fieldStyleID) {
 }
 
 module.exports = {
+  FRONTIER_SYNTHETIC_RESOURCE_FIELDS_ENABLED,
   ensureLoaded,
   getBeltsForSystem,
   getBeltByID,

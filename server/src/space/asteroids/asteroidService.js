@@ -13,6 +13,10 @@ const {
   classifyMiningMaterialType,
 } = require(path.join(__dirname, "../../services/mining/miningInventory"));
 const {
+  TABLE,
+  readStaticTable,
+} = require(path.join(__dirname, "../../services/_shared/referenceData"));
+const {
   recordAsteroidBootstrap,
   resetMiningStartupSummary,
 } = require(path.join(__dirname, "../../services/mining/miningStartupSummary"));
@@ -23,6 +27,7 @@ const {
 
 const STATIC_ASTEROID_ITEM_ID_BASE = 5_000_000_000_000;
 const STATIC_ASTEROID_ITEM_ID_STRIDE = 512;
+const ASTEROID_OUTPUT_TYPE_ATTRIBUTE_ID = 6070;
 
 const FIELD_SHAPE_PROFILES = Object.freeze({
   default: Object.freeze({
@@ -453,7 +458,19 @@ function resolveBeltOrbitContext(scene, belt, systemBelts = []) {
 function buildCurvedFieldProfile(scene, belt, style, systemBelts = []) {
   const orbitContext = resolveBeltOrbitContext(scene, belt, systemBelts);
   const shapeProfile = resolveFieldShapeProfile(style && style.fieldStyleID);
-  const authoredCount = Math.max(1, toPositiveInt(belt && belt.asteroidCount, 1));
+  const authoredCount = clamp(
+    Math.max(1, toPositiveInt(belt && belt.asteroidCount, 1)),
+    1,
+    STATIC_ASTEROID_ITEM_ID_STRIDE - 1,
+  );
+  const maximumCount = clamp(
+    toPositiveInt(
+      belt && belt.maxAsteroidCount,
+      STATIC_ASTEROID_ITEM_ID_STRIDE - 1,
+    ),
+    authoredCount,
+    STATIC_ASTEROID_ITEM_ID_STRIDE - 1,
+  );
   const fieldRadiusMeters = Math.max(
     12_000,
     toFiniteNumber(belt && belt.fieldRadiusMeters, 32_000),
@@ -555,7 +572,7 @@ function buildCurvedFieldProfile(scene, belt, style, systemBelts = []) {
   const count = clamp(
     Math.max(authoredCount, areaCount),
     authoredCount,
-    STATIC_ASTEROID_ITEM_ID_STRIDE - 1,
+    maximumCount,
   );
   const halfSpanMeters = axisSpanMeters * 0.5;
   const controlLeadMeters = anchorBias * 0.22;
@@ -724,6 +741,61 @@ function buildSystemOrePool(systemID) {
     existing.spawnWeight = existing.weight;
   }
   return Array.from(mergedByTypeID.values());
+}
+
+function getTypeDogmaAttributeValue(typeID, attributeID) {
+  const root = readStaticTable(TABLE.TYPE_DOGMA) || {};
+  const record = root.typesByTypeID && root.typesByTypeID[String(toPositiveInt(typeID, 0))];
+  const attributes = record && record.attributes;
+  if (!attributes || typeof attributes !== "object") {
+    return null;
+  }
+  const value = Number(attributes[String(toPositiveInt(attributeID, 0))]);
+  return Number.isFinite(value) ? value : null;
+}
+
+function buildFrontierResourcePool(belt) {
+  const resourceTypeIDs = Array.isArray(belt && belt.resourceTypeIDs)
+    ? belt.resourceTypeIDs
+    : [];
+  const seenCarrierTypeIDs = new Set();
+  const pool = [];
+
+  for (const resourceTypeID of resourceTypeIDs) {
+    const carrierTypeID = toPositiveInt(resourceTypeID, 0);
+    if (carrierTypeID <= 0 || seenCarrierTypeIDs.has(carrierTypeID)) {
+      continue;
+    }
+    const carrierTypeRecord = resolveItemByTypeID(carrierTypeID);
+    if (!carrierTypeRecord) {
+      continue;
+    }
+
+    const outputTypeID = toPositiveInt(
+      getTypeDogmaAttributeValue(
+        carrierTypeID,
+        ASTEROID_OUTPUT_TYPE_ATTRIBUTE_ID,
+      ),
+      carrierTypeID,
+    );
+    const outputTypeRecord = resolveItemByTypeID(outputTypeID) || carrierTypeRecord;
+    const outputClassification = classifyMiningMaterialType(outputTypeRecord);
+    if (!outputClassification || outputClassification.kind !== "ore") {
+      continue;
+    }
+
+    seenCarrierTypeIDs.add(carrierTypeID);
+    pool.push({
+      ...carrierTypeRecord,
+      familyName: String(carrierTypeRecord.name || `Resource ${carrierTypeID}`),
+      spawnWeight: 1,
+      weight: 1,
+      resourceCarrierTypeID: carrierTypeID,
+      miningYieldTypeRecord: outputClassification.typeRecord,
+    });
+  }
+
+  return pool;
 }
 
 function getSecurityMetadata(systemID) {
@@ -1027,6 +1099,9 @@ function buildSystemOreAsteroidEntity(
     return null;
   }
 
+  const carrierTypeRecord = typeRow;
+  const yieldTypeRecord = typeRow.miningYieldTypeRecord || typeRow;
+
   const itemID = buildAsteroidItemID(belt.itemID, asteroidIndex + 1);
   const asteroidOffset = buildCurvedAsteroidOffset(
     fieldProfile,
@@ -1048,21 +1123,27 @@ function buildSystemOreAsteroidEntity(
   const visualRecord =
     resolveItemByTypeID(visualTypeID) || shellTypeRecord || typeRow;
 
-  const name = typeRow.name || `${belt.itemName} Asteroid ${asteroidIndex + 1}`;
+  const name = carrierTypeRecord.name || `${belt.itemName} Asteroid ${asteroidIndex + 1}`;
+  const resourceFieldSource = String(
+    belt.resourceFieldSource || "systemID",
+  );
   return {
     kind: "asteroid",
     generatedAsteroid: true,
-    generatedFromSystemIDTable: true,
-    resourceFieldSource: "systemID",
+    generatedFromSystemIDTable: resourceFieldSource === "systemID",
+    generatedFromFrontierLandscape: belt.frontierLandscapeSite === true,
+    resourceFieldSource,
     itemID,
     typeID: visualRecord.typeID,
     groupID: visualRecord.groupID,
     categoryID: visualRecord.categoryID,
-    slimTypeID: typeRow.typeID,
-    slimGroupID: typeRow.groupID,
-    slimCategoryID: typeRow.categoryID,
-    miningYieldTypeID: typeRow.typeID,
+    slimTypeID: carrierTypeRecord.typeID,
+    slimGroupID: carrierTypeRecord.groupID,
+    slimCategoryID: carrierTypeRecord.categoryID,
+    miningPresentationTypeID: carrierTypeRecord.typeID,
+    miningYieldTypeID: yieldTypeRecord.typeID,
     miningYieldKind: "ore",
+    skipMiningTemplateResolution: belt.frontierLandscapeSite === true,
     itemName: name,
     slimName: name,
     ownerID: 1,
@@ -1083,6 +1164,7 @@ function buildSystemOreAsteroidEntity(
     velocity: { x: 0, y: 0, z: 0 },
     direction: { x: 1, y: 0, z: 0 },
     beltID: belt.itemID,
+    sourceLandscapeSiteID: toPositiveInt(belt.sourceLandscapeSiteID, 0) || null,
     fieldStyleID: belt.fieldStyleID,
     staticVisibilityScope: "bubble",
   };
@@ -1106,9 +1188,17 @@ function populateBeltField(scene, belt) {
   }
 
   const rng = createRng(toPositiveInt(belt.fieldSeed, belt.itemID));
-  const enriched = buildEnrichedSystemOrePool(scene.systemID);
+  const frontierResourcePool = buildFrontierResourcePool(belt);
+  const enriched = frontierResourcePool.length > 0
+    ? {
+      orePool: frontierResourcePool,
+      ...getSecurityMetadata(scene.systemID),
+    }
+    : buildEnrichedSystemOrePool(scene.systemID);
   const systemOrePool = enriched.orePool;
-  const beltSubset = buildBeltOreSubset(systemOrePool, enriched.securityClass, rng);
+  const beltSubset = frontierResourcePool.length > 0
+    ? frontierResourcePool
+    : buildBeltOreSubset(systemOrePool, enriched.securityClass, rng);
   const legacyClusterOffsets = [];
 
   const spawned = [];
@@ -1258,5 +1348,7 @@ module.exports = {
     buildSystemOrePool,
     buildEnrichedSystemOrePool,
     buildBeltOreSubset,
+    buildFrontierResourcePool,
+    getTypeDogmaAttributeValue,
   },
 };

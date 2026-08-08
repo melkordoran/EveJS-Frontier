@@ -5,10 +5,12 @@ const {
   buildNonEnablingMassDemotionAction,
   buildOnSpecialFXPayload,
   buildSetBallAgilityPayload,
+  buildSetBallAngularAgilityPayload,
   buildSetBallMassPayload,
   buildSetBallPositionPayload,
   buildSetBallVelocityPayload,
   buildSetMaxSpeedPayload,
+  buildSetMaxAngularSpeedPayload,
 } = require("../stream/actions");
 const {
   normalizeDestinyStamp,
@@ -25,7 +27,9 @@ const UNDOCK_BOOTSTRAP_EFFECT_DURATION_MS = 6000;
 
 const SHIP_PRIME_PAYLOAD_NAMES = new Set([
   "SetBallAgility",
+  "SetBallAngularAgility",
   "SetBallMass",
+  "SetMaxAngularSpeed",
   "SetMaxSpeed",
 ]);
 
@@ -127,7 +131,7 @@ function buildShipPrimeUpdates(entity, stampOverride = 0) {
   }
 
   const stamp = normalizeDestinyStamp(stampOverride, 0);
-  return [
+  const updates = [
     {
       stamp,
       payload: buildSetBallAgilityPayload(entity.itemID, entity.inertia),
@@ -141,6 +145,25 @@ function buildShipPrimeUpdates(entity, stampOverride = 0) {
       payload: buildSetMaxSpeedPayload(entity.itemID, entity.maxVelocity),
     },
   ];
+  if (toFiniteNumber(entity.maxAngularSpeed, 0) > 0) {
+    updates.push({
+      stamp,
+      payload: buildSetMaxAngularSpeedPayload(
+        entity.itemID,
+        entity.maxAngularSpeed,
+      ),
+    });
+  }
+  if (toFiniteNumber(entity.angularAgility, 0) > 0) {
+    updates.push({
+      stamp,
+      payload: buildSetBallAngularAgilityPayload(
+        entity.itemID,
+        entity.angularAgility,
+      ),
+    });
+  }
+  return updates;
 }
 
 // Bootstrap and fresh acquisition need the complete physical triad. Live
@@ -173,6 +196,24 @@ function buildShipPrimeDeltaUpdates(
     updates.push({
       stamp,
       payload: buildSetMaxSpeedPayload(entity.itemID, entity.maxVelocity),
+    });
+  }
+  if (valuesDiffer(entity.maxAngularSpeed, previousState.maxAngularSpeed)) {
+    updates.push({
+      stamp,
+      payload: buildSetMaxAngularSpeedPayload(
+        entity.itemID,
+        entity.maxAngularSpeed,
+      ),
+    });
+  }
+  if (valuesDiffer(entity.angularAgility, previousState.angularAgility)) {
+    updates.push({
+      stamp,
+      payload: buildSetBallAngularAgilityPayload(
+        entity.itemID,
+        entity.angularAgility,
+      ),
     });
   }
   return updates;

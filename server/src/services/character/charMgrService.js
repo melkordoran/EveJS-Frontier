@@ -20,6 +20,9 @@ const {
   normalizeCharacterGender,
 } = require(path.join(__dirname, "./characterIdentity"));
 const {
+  buildSettingsInfoCode,
+} = require(path.join(__dirname, "./settingsInfoCompatibility"));
+const {
   getStationRecord,
 } = require(path.join(__dirname, "../_shared/stationStaticData"));
 const {
@@ -491,6 +494,10 @@ class CharMgrService extends BaseService {
     return this._globalAssets.Handle_ListStations(args, session, kwargs);
   }
 
+  Handle_ListItemsInSystems(args, session, kwargs) {
+    return this._globalAssets.Handle_ListItemsInSystems(args, session, kwargs);
+  }
+
   Handle_ListStationItems(args, session, kwargs) {
     return this._globalAssets.Handle_ListStationItems(args, session, kwargs);
   }
@@ -720,11 +727,9 @@ class CharMgrService extends BaseService {
     );
   }
 
-  Handle_GetSettingsInfo() {
+  Handle_GetSettingsInfo(args, session) {
     log.debug("[CharMgr] GetSettingsInfo called");
-    const py2codeHex =
-      "630000000000000000010000004300000073040000006900005328010000004e280000000028000000002800000000280000000073080000003c737472696e673e740100000066010000007300000000";
-    return [Buffer.from(py2codeHex, "hex"), 0];
+    return [buildSettingsInfoCode(session && session.compatibilityProfile), 0];
   }
 
   Handle_GetContactList(args, session) {

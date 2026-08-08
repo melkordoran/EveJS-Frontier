@@ -16,24 +16,62 @@ const {
   requireEntityID,
 } = require("../identity/entityID");
 const {
+  DESTINY_STAMP_INTERVAL_MS,
+} = require("../constants");
+const {
   encodeEntityBall: defaultEncodeEntityBall,
 } = require("./ballEncoding");
 const {
   toInt32,
 } = require("./primitives");
+const {
+  normalizeCrDataDictionaryForProfile,
+  usesCrDataBallMetadata,
+  usesCrDataSetState,
+  usesFrontierStateStreamPreamble,
+} = require("./statePayloadCompatibility");
+
+const FRONTIER_STATE_PHYSICS_DEFAULTS = [1, 0, 1];
 
 function normalizeStateStamp(stamp) {
   return toInt32(stamp, 0) >>> 0;
+}
+
+function normalizeStateTime(value) {
+  try {
+    return BigInt.asIntN(64, BigInt(value ?? 0));
+  } catch (_error) {
+    return 0n;
+  }
 }
 
 function isDestinyBallPayloadEntity(entity) {
   return Boolean(entity) && entity.omitDestinyBall !== true;
 }
 
-function encodeStateHeader(packetType, stamp) {
-  const buffer = Buffer.alloc(5);
+function encodeStateHeader(packetType, stamp, deps = {}) {
+  const useFrontierPreamble = usesFrontierStateStreamPreamble(
+    deps.compatibilityProfile,
+  );
+  const buffer = Buffer.alloc(useFrontierPreamble ? 41 : 5);
   buffer.writeUInt8(toInt32(packetType, 0) & 0xff, 0);
   buffer.writeUInt32LE(normalizeStateStamp(stamp), 1);
+  if (useFrontierPreamble) {
+    buffer.writeBigInt64LE(normalizeStateTime(deps.simFileTime), 5);
+    buffer.writeUInt32LE(
+      Math.max(
+        1,
+        Math.min(
+          100000,
+          toInt32(deps.tickIntervalMs, DESTINY_STAMP_INTERVAL_MS),
+        ),
+      ),
+      13,
+    );
+    FRONTIER_STATE_PHYSICS_DEFAULTS.forEach((value, index) => {
+      buffer.writeDoubleLE(value, 17 + (index * 8));
+    });
+  }
   return buffer;
 }
 
@@ -54,9 +92,13 @@ function resolveEntityBallEncoder(deps) {
 
 function buildStateBuffer(packetType, stamp, entities, deps = {}) {
   const encodeEntityBall = resolveEntityBallEncoder(deps);
-  const chunks = [encodeStateHeader(packetType, stamp)];
+  const chunks = [encodeStateHeader(packetType, stamp, deps)];
+  const encodeOptions = {
+    ...(deps.encodeOptions || {}),
+    compatibilityProfile: deps.compatibilityProfile,
+  };
   for (const entity of normalizeBallEntities(entities)) {
-    chunks.push(encodeEntityBall(entity, deps.encodeOptions || {}));
+    chunks.push(encodeEntityBall(entity, encodeOptions));
   }
   return Buffer.concat(chunks);
 }
@@ -96,13 +138,31 @@ function buildAddBallsExtraBallData(ballEntities, simFileTime, deps = {}) {
   const buildDamageState = typeof deps.buildDamageState === "function"
     ? deps.buildDamageState
     : null;
+  const useCrData = usesCrDataBallMetadata(deps.compatibilityProfile);
 
   return normalizeBallEntities(ballEntities)
     .filter((entity) => entity.omitSlimItem !== true)
     .map((entity) => {
-      const slimItem = deps.buildSlimItemDict(entity);
-      if (buildDamageState && shouldBuildDamageState(entity, deps)) {
-        return [slimItem, buildDamageState(entity, simFileTime)];
+      const slimItem = normalizeCrDataDictionaryForProfile(
+        deps.buildSlimItemDict(entity),
+        entity,
+        deps.compatibilityProfile,
+      );
+      const damageState = buildDamageState && shouldBuildDamageState(entity, deps)
+        ? buildDamageState(entity, simFileTime)
+        : null;
+      if (useCrData) {
+        const entry = [
+          requireEntityID(entity.itemID, "AddBalls2 crdata entityID"),
+          slimItem,
+        ];
+        if (damageState !== null) {
+          entry.push(damageState);
+        }
+        return entry;
+      }
+      if (damageState !== null) {
+        return [slimItem, damageState];
       }
       return slimItem;
     });
@@ -115,7 +175,10 @@ function buildAddBalls2Payload(
   deps = {},
 ) {
   const ballEntities = normalizeBallEntities(entities);
-  const state = buildAddBallsStateBuffer(stateStamp, ballEntities, deps);
+  const state = buildAddBallsStateBuffer(stateStamp, ballEntities, {
+    ...deps,
+    simFileTime,
+  });
   const extraBallData = buildAddBallsExtraBallData(
     ballEntities,
     simFileTime,
@@ -140,8 +203,10 @@ function isSetStateDependencyBag(value) {
     return [
       "buildDamageState",
       "buildDroneState",
+      "buildSlimItemDict",
       "buildSlimItemObject",
       "buildSolItem",
+      "compatibilityProfile",
       "encodeEntityBall",
       "hasDamageableHealth",
     ].some((name) => name in value);
@@ -177,7 +242,11 @@ function buildSetStatePayload(
 ) {
   const resolved = resolveSetStateArguments(effectStateEntries, deps);
   const stateDeps = resolved.deps;
-  if (typeof stateDeps.buildSlimItemObject !== "function") {
+  const useCrData = usesCrDataSetState(stateDeps.compatibilityProfile);
+  if (useCrData && typeof stateDeps.buildSlimItemDict !== "function") {
+    throw new TypeError("buildSetStatePayload requires buildSlimItemDict");
+  }
+  if (!useCrData && typeof stateDeps.buildSlimItemObject !== "function") {
     throw new TypeError("buildSetStatePayload requires buildSlimItemObject");
   }
   if (typeof stateDeps.buildDroneState !== "function") {
@@ -202,11 +271,39 @@ function buildSetStatePayload(
   const slimEntities = ballEntities.filter((entity) => (
     entity.omitSlimItem !== true
   ));
+  const entityStateEntry = useCrData
+    ? [
+      "crdata",
+      buildDict(slimEntities.map((entity) => [
+        requireEntityID(entity.itemID, "SetState crdata entityID"),
+        normalizeCrDataDictionaryForProfile(
+          stateDeps.buildSlimItemDict(entity),
+          entity,
+          stateDeps.compatibilityProfile,
+        ),
+      ])),
+    ]
+    : [
+      "slims",
+      buildList(slimEntities.map((entity) => (
+        stateDeps.buildSlimItemObject(entity)
+      ))),
+    ];
+  const stateBuffer = buildSetStateBuffer(stateStamp, ballEntities, {
+    ...stateDeps,
+    simFileTime,
+  });
 
   const state = buildKeyVal([
     ["stamp", stateStamp],
-    ["state", buildSetStateBuffer(stateStamp, ballEntities, stateDeps)],
-    ["ego", requireEntityID(egoEntityID, "SetState ego entityID")],
+    [
+      "state",
+      stateBuffer,
+    ],
+    [
+      "ego",
+      requireEntityID(egoEntityID, "SetState ego entityID"),
+    ],
     ["industryLevel", 0],
     ["researchLevel", 0],
     ["damageState", buildDict(damageEntries)],
@@ -216,12 +313,7 @@ function buildSetStatePayload(
     ],
     ["aggressors", buildDict([])],
     ["droneState", stateDeps.buildDroneState(ballEntities)],
-    [
-      "slims",
-      buildList(slimEntities.map((entity) => (
-        stateDeps.buildSlimItemObject(entity)
-      ))),
-    ],
+    entityStateEntry,
     ["solItem", stateDeps.buildSolItem(system)],
     ["effectStates", buildList(resolved.effectStateEntries)],
     ["allianceBridges", buildList([])],

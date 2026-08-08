@@ -68,6 +68,9 @@ const {
   getAppliedSkinRecord,
 } = require(path.join(__dirname, "../services/ship/shipCosmeticsState"));
 const {
+  defersUndockBallparkStateUntilBeyonceBind,
+} = require(path.join(__dirname, "../services/ship/destinyCompatibility"));
+const {
   getEnabledCosmeticsEntries,
 } = require(path.join(__dirname, "../services/ship/shipLogoFittingState"));
 const {
@@ -2254,6 +2257,10 @@ function undockSession(session, options = {}) {
       skipLegacyStationNormalization: true,
       broadcast: true,
       emitSimClockRebase: false,
+      deferInitialBallparkStateUntilBind:
+        defersUndockBallparkStateUntilBeyonceBind(
+          session && session.compatibilityProfile,
+        ),
       ...buildPostAttachVisibilityReconciliationOptions("undock"),
       deferUniverseSiteReconcile: true,
       universeSiteReconcileReason: "undock",

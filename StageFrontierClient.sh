@@ -2,10 +2,12 @@
 
 set -euo pipefail
 
-BUILD="3450341"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BUILD="3455996"
 SOURCE_ROOT="${HOME}/Library/Application Support/EVE Frontier"
 STAGED_BASE="${HOME}/Library/Application Support/evejs-frontier/macos/staged-client"
 CLEAN=false
+PATCH_CLIENT_TRUST=true
 
 usage() {
   cat <<'EOF'
@@ -15,10 +17,12 @@ Creates an isolated staged copy of the installed EVE Frontier client. The
 retail client and shared ResFiles cache are never modified.
 
 Options:
-  --build <number>       Installed Frontier build. Default: 3450341
+  --build <number>       Installed Frontier build. Default: 3455996
   --source-root <path>   Frontier launcher data root
   --staged-base <path>   Build-numbered staging base
   --clean                Replace this build's existing staged copy
+  --no-client-trust-patch
+                         Leave blue.so and embedded CA bundles untouched
   -h, --help             Show this help
 EOF
 }
@@ -39,6 +43,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --clean)
       CLEAN=true
+      shift
+      ;;
+    --no-client-trust-patch)
+      PATCH_CLIENT_TRUST=false
       shift
       ;;
     --help|-h)
@@ -133,7 +141,18 @@ elif [[ -e "$CURRENT_LINK" ]]; then
 fi
 ln -s "./${BUILD}" "$CURRENT_LINK"
 
+if [[ "$PATCH_CLIENT_TRUST" == true ]]; then
+  bash "${SCRIPT_DIR}/PatchFrontierClientTrust.sh" --staged-root "$STAGED_ROOT"
+  BLUE_HASH="$(shasum -a 256 "${STAGED_BUILD}/bin64/blue.so" | awk '{print $1}')"
+fi
+
 echo "[evejs-frontier] Staged client: $STAGED_ROOT"
 echo "[evejs-frontier] ResFiles: symlinked to the installed Frontier cache"
-echo "[evejs-frontier] blue.so: unmodified ($BLUE_HASH)"
+if [[ "$PATCH_CLIENT_TRUST" == true ]]; then
+  echo "[evejs-frontier] blue.so: manifest verifier patched ($BLUE_HASH)"
+  echo "[evejs-frontier] XMPP CA: installed in both embedded client bundles"
+  echo "[evejs-frontier] Station docking: enabled in staged code.ccp"
+else
+  echo "[evejs-frontier] blue.so: unmodified ($BLUE_HASH)"
+fi
 echo "[evejs-frontier] Boot overlay: common.ini cryptoPack=Placebo"

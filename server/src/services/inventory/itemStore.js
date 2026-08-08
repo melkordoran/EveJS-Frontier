@@ -122,6 +122,10 @@ const DEFAULT_SHIP_CONDITION_STATE = Object.freeze({
   armorDamage: 0.0,
   shieldCharge: 1.0,
   incapacitated: false,
+  // Frontier fuel tank level in absolute fuel units (not a 0-1 ratio like
+  // `charge`): capacity can change with Creation layout edits, so a ratio
+  // would silently rescale the stored fuel.
+  fuelCharge: 0.0,
 });
 const DEFAULT_MODULE_STATE = Object.freeze({
   online: false,
@@ -1052,6 +1056,10 @@ function normalizeShipConditionState(rawValue) {
     ),
     incapacitated: Boolean(
       source.incapacitated ?? DEFAULT_SHIP_CONDITION_STATE.incapacitated,
+    ),
+    fuelCharge: Math.max(
+      0,
+      conditionNumber(source.fuelCharge, DEFAULT_SHIP_CONDITION_STATE.fuelCharge),
     ),
   };
 }
@@ -3527,6 +3535,7 @@ function stageItemMoveToLocation(
   destinationLocationId,
   destinationFlagId,
   quantity = null,
+  options = {},
 ) {
   const numericItemId = toNumber(itemId, 0);
   const destinationLocationID = toNumber(destinationLocationId, 0);
@@ -3561,7 +3570,11 @@ function stageItemMoveToLocation(
     };
   }
 
+  const moveOptions = options && typeof options === "object" ? options : {};
   const changes = [];
+  const createdItemIDs = [];
+  let movedItemID = numericItemId;
+  let remainderItemID = null;
   const movingWholeItem = currentItem.singleton === 1 || moveQuantity === availableQuantity;
   const movedBase = buildMovedItemState(
     currentItem,
@@ -3569,9 +3582,13 @@ function stageItemMoveToLocation(
     destinationFlagID,
   );
 
-  const fittingDestination = isFittingFlag(destinationFlagID);
+  const fittingDestination =
+    isFittingFlag(destinationFlagID) ||
+    moveOptions.treatDestinationAsFitting === true;
   const affectsFitting =
-    fittingDestination || isFittingFlag(toNumber(currentItem.flagID, 0));
+    fittingDestination ||
+    isFittingFlag(toNumber(currentItem.flagID, 0)) ||
+    moveOptions.affectsFitting === true;
   // CCP parity: only modules (categoryID 7) become singletons when fitted.
   // Charges (categoryID 8) loaded into a module's flag keep their stack
   // quantity — they are NOT singletons.
@@ -3622,6 +3639,77 @@ function stageItemMoveToLocation(
         item: cloneValue(movedItem),
       });
     }
+  } else if (
+    moveOptions.preserveMovedItemID === true &&
+    convertToSingleton &&
+    moveQuantity === 1
+  ) {
+    // Creation management drafts refer to the selected inventory itemID again
+    // when they immediately online the fitted module. Preserve that ID on the
+    // fitted singleton and allocate the leftover stack a new ID instead.
+    const sourcePreviousData = cloneValue(currentItem);
+    const remainderLocationID = toNumber(
+      moveOptions.remainderLocationID,
+      currentItem.locationID,
+    );
+    const remainderFlagID = toNumber(
+      moveOptions.remainderFlagID,
+      currentItem.flagID,
+    );
+    const remainderBase = buildMovedItemState(
+      currentItem,
+      remainderLocationID,
+      remainderFlagID,
+    );
+    const remainderItem = buildInventoryItem({
+      ...remainderBase,
+      itemID: nextItemID(currentItem.ownerID, items, characters[String(currentItem.ownerID)]),
+      quantity: availableQuantity - moveQuantity,
+      stacksize: availableQuantity - moveQuantity,
+      singleton: 0,
+      stackOriginID:
+        toNumber(currentItem.stackOriginID, 0) > 0
+          ? toNumber(currentItem.stackOriginID, 0)
+          : currentItem.itemID,
+    });
+    remainderItemID = remainderItem.itemID;
+    createdItemIDs.push(remainderItem.itemID);
+    items[String(remainderItem.itemID)] = remainderItem;
+    changes.push({
+      created: true,
+      removed: false,
+      previousData: buildCreatedItemNotificationPreviousState(
+        remainderItem,
+        currentItem.flagID,
+        currentItem.ownerID,
+      ),
+      item: cloneValue(remainderItem),
+    });
+
+    const singletonAtSource = buildInventoryItem({
+      ...currentItem,
+      quantity: null,
+      stacksize: 1,
+      singleton: 1,
+    });
+    const movedItem = buildInventoryItem({
+      ...movedBase,
+      itemID: currentItem.itemID,
+      quantity: null,
+      stacksize: 1,
+      singleton: 1,
+    });
+    items[String(movedItem.itemID)] = movedItem;
+    changes.push({
+      removed: false,
+      previousData: sourcePreviousData,
+      item: cloneValue(singletonAtSource),
+    });
+    changes.push({
+      removed: false,
+      previousData: cloneValue(singletonAtSource),
+      item: cloneValue(movedItem),
+    });
   } else {
     const sourcePreviousData = cloneValue(currentItem);
     const updatedSource = buildInventoryItem({
@@ -3649,6 +3737,9 @@ function stageItemMoveToLocation(
           ? toNumber(currentItem.stackOriginID, 0)
           : currentItem.itemID,
     });
+    movedItemID = nextItem.itemID;
+    remainderItemID = updatedSource.itemID;
+    createdItemIDs.push(nextItem.itemID);
     items[String(nextItem.itemID)] = nextItem;
     changes.push({
       removed: false,
@@ -3671,6 +3762,9 @@ function stageItemMoveToLocation(
     data: {
       quantity: moveQuantity,
       changes,
+      createdItemIDs,
+      movedItemID,
+      remainderItemID,
     },
   };
 }
@@ -3680,6 +3774,7 @@ function moveItemToLocation(
   destinationLocationId,
   destinationFlagId,
   quantity = null,
+  options = {},
 ) {
   ensureMigrated();
   const items = readItems();
@@ -3690,6 +3785,7 @@ function moveItemToLocation(
     destinationLocationId,
     destinationFlagId,
     quantity,
+    options,
   );
   if (!stageResult.success) {
     return stageResult;

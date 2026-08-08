@@ -7,6 +7,9 @@ const {
   buildList,
   buildPythonSet,
 } = require(path.join(__dirname, "../_shared/serviceHelpers"));
+const {
+  normalizeCombatTimersForProfile,
+} = require(path.join(__dirname, "crimewatchCompatibility"));
 const sessionRegistry = require(path.join(__dirname, "../chat/sessionRegistry"));
 const npcRuntime = require(path.join(__dirname, "../../space/npc/npcRuntime"));
 const {
@@ -1185,9 +1188,13 @@ function buildClientStatesForSession(session, now = Date.now()) {
   const characterID = resolveSessionCharacterID(session);
   const state = getCharacterCrimewatchState(characterID, now) ||
     buildDefaultCharacterState(characterID);
+  const combatTimers = buildCombatTimerTuplesFromState(state, now);
 
   return [
-    buildCombatTimerTuplesFromState(state, now),
+    normalizeCombatTimersForProfile(
+      combatTimers,
+      session && session.compatibilityProfile,
+    ),
     buildDict([]),
     buildFlaggedCharactersForSession(session, now),
     normalizeSafetyLevel(state.safetyLevel),

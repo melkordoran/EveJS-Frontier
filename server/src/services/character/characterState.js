@@ -26,6 +26,7 @@ const {
   getItemMutationVersion,
   ITEM_FLAGS,
   isCapsuleTypeID,
+  grantItemToCharacterLocation,
   grantItemToCharacterStationHangar,
   removeInventoryItem,
   setActiveShipForCharacter,
@@ -4616,6 +4617,92 @@ function giveItemToHangarForSession(session, itemType, quantity = 1) {
   };
 }
 
+function giveItemToActiveShipCargoForSession(
+  session,
+  itemType,
+  quantity = 1,
+  grantOptions = {},
+) {
+  if (!session || !session.characterID) {
+    return {
+      success: false,
+      errorMsg: "CHARACTER_NOT_SELECTED",
+    };
+  }
+
+  if (isDockedSession(session)) {
+    return {
+      success: false,
+      errorMsg: "IN_SPACE_REQUIRED",
+    };
+  }
+
+  const charId = Number(session.characterID) || 0;
+  const activeShip = getActiveShipRecord(charId);
+  const shipId = Number(
+    session.shipid || session.shipID || (activeShip && activeShip.itemID),
+  ) || 0;
+  const shipItem = shipId > 0 ? findCharacterShipItem(charId, shipId) : null;
+  if (!shipItem) {
+    return {
+      success: false,
+      errorMsg: "ACTIVE_SHIP_NOT_FOUND",
+    };
+  }
+
+  const solarSystemId = Number(
+    session.solarsystemid2 || session.solarsystemid || session.locationid,
+  ) || 0;
+  if (
+    Number(shipItem.flagID || 0) !== 0 ||
+    (solarSystemId > 0 && Number(shipItem.locationID || 0) !== solarSystemId)
+  ) {
+    return {
+      success: false,
+      errorMsg: "ACTIVE_SHIP_NOT_IN_SPACE",
+    };
+  }
+
+  const grantResult = grantItemToCharacterLocation(
+    charId,
+    shipItem.itemID,
+    ITEM_FLAGS.CARGO_HOLD,
+    itemType,
+    quantity,
+    grantOptions,
+  );
+  if (!grantResult.success) {
+    return grantResult;
+  }
+
+  for (const change of grantResult.data.changes || []) {
+    if (!change || !change.item) {
+      continue;
+    }
+
+    syncInventoryItemForSession(
+      session,
+      change.item,
+      change.previousState || {
+        locationID: 0,
+        flagID: ITEM_FLAGS.CARGO_HOLD,
+      },
+      {
+        emitCfgLocation: true,
+      },
+    );
+  }
+
+  return {
+    success: true,
+    data: {
+      ...grantResult.data,
+      destinationFlagID: ITEM_FLAGS.CARGO_HOLD,
+      destinationLocationID: shipItem.itemID,
+    },
+  };
+}
+
 function spawnShipInHangarForSession(session, shipType) {
   const spawnResult = giveItemToHangarForSession(session, shipType, 1);
   if (!spawnResult.success) {
@@ -4658,6 +4745,7 @@ module.exports = {
   applyCharacterToSession,
   clearCharacterFromSession,
   activateShipForSession,
+  giveItemToActiveShipCargoForSession,
   giveItemToHangarForSession,
   spawnShipInHangarForSession,
   setActiveShipForSession,

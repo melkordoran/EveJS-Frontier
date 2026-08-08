@@ -1,10 +1,18 @@
 const path = require("path");
 const fs = require("fs");
 
+const config = require(path.join(__dirname, "../../config"));
+const log = require(path.join(__dirname, "../../utils/logger"));
 const {
   TABLE,
+  readStaticRows,
   readStaticTable,
 } = require(path.join(__dirname, "../_shared/referenceData"));
+const {
+  buildPositiveIDSet,
+  isFrontierProfile,
+  shouldIncludeAgentRecord,
+} = require(path.join(__dirname, "./agentCompatibility"));
 
 const REPO_ROOT = path.resolve(__dirname, "../../../..");
 const AGENTS_IN_SPACE_JSONL_PATH = path.join(
@@ -143,18 +151,48 @@ function buildIndexes(agentsByID) {
 
 function buildCache() {
   const payload = normalizePayload(readStaticTable(TABLE.AGENT_AUTHORITY));
-  const agentsInSpaceByID = buildAgentsInSpaceByID();
+  const compatibilityProfile = config.clientCompatibilityProfile;
+  const frontierProfile = isFrontierProfile(compatibilityProfile);
+  const agentsInSpaceByID = frontierProfile
+    ? new Map()
+    : buildAgentsInSpaceByID();
+  const validStationIDs = frontierProfile
+    ? buildPositiveIDSet(readStaticRows(TABLE.STATIONS), "stationID")
+    : new Set();
+  const validSolarSystemIDs = frontierProfile
+    ? buildPositiveIDSet(readStaticRows(TABLE.SOLAR_SYSTEMS), "solarSystemID")
+    : new Set();
   const agentsByID = new Map();
+  let sourceAgentCount = 0;
   for (const [agentID, record] of Object.entries(payload.agentsByID || {})) {
+    sourceAgentCount += 1;
     const normalizedAgentID = toInt(agentID, 0);
-    agentsByID.set(normalizedAgentID, applyInSpaceOverlay({
+    const normalizedRecord = applyInSpaceOverlay({
       ...clone(record),
       agentID: toInt(record && record.agentID, normalizedAgentID),
-    }, agentsInSpaceByID.get(normalizedAgentID)));
+    }, agentsInSpaceByID.get(normalizedAgentID));
+    if (!shouldIncludeAgentRecord(
+      normalizedRecord,
+      compatibilityProfile,
+      validStationIDs,
+      validSolarSystemIDs,
+    )) {
+      continue;
+    }
+    agentsByID.set(normalizedAgentID, normalizedRecord);
+  }
+
+  if (frontierProfile) {
+    log.info(
+      `[AgentAuthority] Frontier location filter retained ${agentsByID.size} of ${sourceAgentCount} agents`,
+    );
   }
 
   return {
-    payload,
+    payload: {
+      ...payload,
+      agentsByID: Object.fromEntries(agentsByID.entries()),
+    },
     agentsByID,
     agentsInSpaceByID,
     indexes: buildIndexes(agentsByID),
@@ -247,6 +285,7 @@ function listAgentsInSpace() {
 }
 
 module.exports = {
+  buildPositiveIDSet,
   clearCache,
   getAgentInSpaceByID,
   getAgentByID,
@@ -259,4 +298,5 @@ module.exports = {
   listAgentsBySolarSystemID,
   listAgentsByStationID,
   listMissionTemplateIDsForAgent,
+  shouldIncludeAgentRecord,
 };

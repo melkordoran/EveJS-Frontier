@@ -5,6 +5,14 @@ const log = require(path.join(__dirname, "../../utils/logger"));
 
 const TABLE = Object.freeze({
   ITEM_TYPES: "itemTypes",
+  CREATION_HARDPOINT_TYPES: "creationHardpointTypes",
+  CREATION_MODULES: "creationModules",
+  CREATION_PARTS: "creationParts",
+  CREATION_TEMPLATES: "creationTemplates",
+  FRONTIER_DUNGEON_TEMPLATES: "frontierDungeonTemplates",
+  LANDSCAPE_DUNGEON_TEMPLATES: "landscapeDungeonTemplates",
+  LANDSCAPE_ECOSYSTEMS: "landscapeEcosystems",
+  LANDSCAPE_SITES: "landscapeSites",
   CLIENT_TYPE_LISTS: "clientTypeLists",
   CLIENT_ENTITY_STANDINGS: "clientEntityStandings",
   MAP_TAGS_AUTHORITY: "mapTagsAuthority",
@@ -20,6 +28,7 @@ const TABLE = Object.freeze({
   CHARACTER_CREATION_BLOODLINES: "characterCreationBloodlines",
   CHARACTER_CREATION_SCHOOLS: "characterCreationSchools",
   SOLAR_SYSTEMS: "solarSystems",
+  SPACE_COMPONENTS_BY_TYPE: "spaceComponentsByType",
   STATIONS: "stations",
   STATION_TYPES: "stationTypes",
   STARGATE_TYPES: "stargateTypes",
@@ -41,6 +50,14 @@ const TABLE = Object.freeze({
 
 const ROW_KEY = Object.freeze({
   [TABLE.ITEM_TYPES]: "types",
+  [TABLE.CREATION_HARDPOINT_TYPES]: "hardpointTypes",
+  [TABLE.CREATION_MODULES]: "modules",
+  [TABLE.CREATION_PARTS]: "parts",
+  [TABLE.CREATION_TEMPLATES]: "templates",
+  [TABLE.FRONTIER_DUNGEON_TEMPLATES]: "dungeons",
+  [TABLE.LANDSCAPE_DUNGEON_TEMPLATES]: "dungeons",
+  [TABLE.LANDSCAPE_ECOSYSTEMS]: "ecosystems",
+  [TABLE.LANDSCAPE_SITES]: "sites",
   [TABLE.CLIENT_TYPE_LISTS]: "typeLists",
   [TABLE.CLIENT_ENTITY_STANDINGS]: "types",
   [TABLE.SHIP_TYPES]: "ships",
@@ -49,6 +66,7 @@ const ROW_KEY = Object.freeze({
   [TABLE.CHARACTER_CREATION_BLOODLINES]: "bloodlines",
   [TABLE.CHARACTER_CREATION_SCHOOLS]: "schools",
   [TABLE.SOLAR_SYSTEMS]: "solarSystems",
+  [TABLE.SPACE_COMPONENTS_BY_TYPE]: "types",
   [TABLE.STATIONS]: "stations",
   [TABLE.STATION_TYPES]: "stationTypes",
   [TABLE.STARGATE_TYPES]: "stargateTypes",
@@ -157,9 +175,12 @@ const EFFECT_CATEGORY_OVERRIDES_BY_NAME = new Map([
 ]);
 
 function resolveEffectCategoryID(row) {
-  const stockCategoryID = toInt(row && row.effectCategoryID, 0);
+  const stockCategoryID = toInt(
+    row && (row.effectCategoryID ?? row.effectCategory),
+    0,
+  );
   const override = EFFECT_CATEGORY_OVERRIDES_BY_NAME.get(
-    String(row && row.name || "").trim().toLowerCase(),
+    String(row && (row.name || row.effectName) || "").trim().toLowerCase(),
   );
   return override === undefined ? stockCategoryID : override;
 }
@@ -174,7 +195,7 @@ function normalizeDogmaEffectType(row) {
   }
   return {
     effectID,
-    name: row.name || "",
+    name: row.name || row.effectName || "",
     displayName: localName(row.displayName),
     description: localName(row.description),
     guid: row.guid || "",

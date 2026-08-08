@@ -171,9 +171,10 @@ class SkillMgrService extends BaseService {
     );
   }
 
-  _buildSkillInfo(skillRecord) {
+  _buildSkillInfo(skillRecord, session) {
     return buildCharacterSkillEntry(skillRecord, {
       includeMetadata: true,
+      compatibilityProfile: session && session.compatibilityProfile,
     });
   }
 
@@ -211,6 +212,7 @@ class SkillMgrService extends BaseService {
       this._overlayActiveTrainingSkill(skills, snapshot),
       {
         includeMetadata: true,
+        compatibilityProfile: session && session.compatibilityProfile,
       },
     );
   }

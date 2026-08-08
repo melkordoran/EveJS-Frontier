@@ -3,7 +3,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-BUILD="3450341"
+BUILD="3455996"
 RESET_RUNTIME=false
 LOG_LEVEL="2"
 
@@ -15,7 +15,7 @@ Starts an isolated EVE Frontier compatibility server on local development
 ports. It never reads or writes the live EveJS game store.
 
 Options:
-  --build <number>   Extracted/generated Frontier build. Default: 3450341
+  --build <number>   Extracted/generated Frontier build. Default: 3455996
   --reset-runtime   Replace the disposable runtime database from its generated baseline
   --quiet           Use normal rather than verbose server logging
   -h, --help        Show this help
@@ -112,13 +112,14 @@ exec env \
   EVEJS_MICROSERVICES_BIND_HOST="127.0.0.1" \
   EVEJS_PROXY_LOOPBACK_CDN_LISTEN_PORT="0" \
   EVEJS_REDSHIFT_MONITOR_PORT="26401" \
-  EVEJS_XMPP_SERVER_PORT="5223" \
+  EVEJS_XMPP_SERVER_PORT="5222" \
   EVEJS_XMPP_CONNECT_HOST="127.0.0.1" \
   EVEJS_XMPP_DOMAIN="frontier.localhost" \
   EVEJS_XMPP_CONFERENCE_DOMAIN="conference.frontier.localhost" \
   EVEJS_DEV_AUTO_CREATE_ACCOUNTS="true" \
   EVEJS_DEV_SKIP_PASSWORD_VALIDATION="true" \
   EVEJS_WORMHOLES_ENABLED="false" \
+  EVEJS_MARKET_DAEMON_ENABLED="false" \
   EVEJS_SKIP_NPC_STARTUP="1" \
   EVEJS_LOG_LEVEL="$LOG_LEVEL" \
   node server/index.js

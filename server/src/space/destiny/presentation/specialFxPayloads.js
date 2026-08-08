@@ -43,7 +43,14 @@ function buildDamageStatePresentationUpdates(options = {}) {
   )];
 }
 
+// A null slim item means the active profile does not accept wire SlimItem
+// objects (see normalizeSlimItemObjectForProfile): emit no OnSlimItemChange
+// update at all rather than an empty one, so the surrounding bundle stays
+// unmarshallable-free.
 function buildSlimItemPresentationUpdates(options = {}) {
+  if (!options.slimItem) {
+    return [];
+  }
   return [buildPresentationUpdate(
     options.stamp,
     buildOnSlimItemChangePayload(options.entityID, options.slimItem),
@@ -77,11 +84,17 @@ function buildStructureLifecyclePresentationUpdates(options = {}) {
       options.stamp,
       buildOnDamageStateChangePayload(options.entityID, options.damageState),
     ),
-    buildPresentationUpdate(
-      options.stamp,
-      buildOnSlimItemChangePayload(options.entityID, options.slimItem),
-    ),
   );
+  // Only profiles that accept wire SlimItem objects get the slim refresh; the
+  // damage-state update above must survive on every profile.
+  if (options.slimItem) {
+    updates.push(
+      buildPresentationUpdate(
+        options.stamp,
+        buildOnSlimItemChangePayload(options.entityID, options.slimItem),
+      ),
+    );
+  }
   return updates;
 }
 

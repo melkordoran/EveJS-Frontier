@@ -1491,6 +1491,7 @@ function isMarketDaemonUnavailableError(error) {
   const message = String(error && error.message ? error.message : error || "")
     .toLowerCase();
   return (
+    message.includes("market daemon rpc is disabled") ||
     message.includes("market daemon rpc connect timeout") ||
     message.includes("market daemon rpc socket closed before connect") ||
     message.includes("market daemon rpc connection is not ready") ||
@@ -3184,8 +3185,12 @@ async function applySellOrderCrossingAfterModify(session, order, newPrice) {
 class MarketProxyService extends BaseService {
   constructor() {
     super("marketProxy");
-    marketDaemonClient.startBackgroundConnect();
-    ensureMarketExpiryPollerStarted();
+    if (marketDaemonClient.enabled) {
+      marketDaemonClient.startBackgroundConnect();
+      ensureMarketExpiryPollerStarted();
+    } else {
+      log.info("[MarketProxy] External market daemon is disabled");
+    }
   }
 
   async Handle_StartupCheck() {

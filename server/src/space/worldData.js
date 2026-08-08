@@ -19,6 +19,9 @@ function buildMaps() {
   const stargateTypes = readStaticRows(TABLE.STARGATE_TYPES);
   const celestials = readStaticRows(TABLE.CELESTIALS);
   const asteroidBelts = readStaticRows(TABLE.ASTEROID_BELTS);
+  const landscapeDungeonTemplates = readStaticRows(TABLE.LANDSCAPE_DUNGEON_TEMPLATES);
+  const landscapeEcosystems = readStaticRows(TABLE.LANDSCAPE_ECOSYSTEMS);
+  const landscapeSites = readStaticRows(TABLE.LANDSCAPE_SITES);
   const stargates = readStaticRows(TABLE.STARGATES);
   const attributes = readStaticRows(TABLE.MOVEMENT_ATTRIBUTES);
 
@@ -28,9 +31,13 @@ function buildMaps() {
   const stargateTypesById = new Map();
   const celestialsById = new Map();
   const asteroidBeltsById = new Map();
+  const landscapeDungeonTemplatesById = new Map();
+  const landscapeEcosystemsById = new Map();
+  const landscapeSitesById = new Map();
   const stationsBySystem = new Map();
   const celestialsBySystem = new Map();
   const asteroidBeltsBySystem = new Map();
+  const landscapeSitesBySystem = new Map();
   const stargatesById = new Map();
   const stargatesBySystem = new Map();
   const movementByTypeId = new Map();
@@ -71,6 +78,22 @@ function buildMaps() {
     asteroidBeltsBySystem.get(asteroidBelt.solarSystemID).push(asteroidBelt);
   }
 
+  for (const dungeon of landscapeDungeonTemplates) {
+    landscapeDungeonTemplatesById.set(Number(dungeon.dungeonID ?? dungeon._key), dungeon);
+  }
+
+  for (const ecosystem of landscapeEcosystems) {
+    landscapeEcosystemsById.set(Number(ecosystem.ecosystemID ?? ecosystem._key), ecosystem);
+  }
+
+  for (const landscapeSite of landscapeSites) {
+    landscapeSitesById.set(landscapeSite.itemID, landscapeSite);
+    if (!landscapeSitesBySystem.has(landscapeSite.solarSystemID)) {
+      landscapeSitesBySystem.set(landscapeSite.solarSystemID, []);
+    }
+    landscapeSitesBySystem.get(landscapeSite.solarSystemID).push(landscapeSite);
+  }
+
   for (const stargate of stargates) {
     stargatesById.set(stargate.itemID, stargate);
     if (!stargatesBySystem.has(stargate.solarSystemID)) {
@@ -92,6 +115,9 @@ function buildMaps() {
   for (const value of asteroidBeltsBySystem.values()) {
     value.sort((left, right) => left.itemID - right.itemID);
   }
+  for (const value of landscapeSitesBySystem.values()) {
+    value.sort((left, right) => left.itemID - right.itemID);
+  }
   for (const value of stargatesBySystem.values()) {
     value.sort((left, right) => left.itemID - right.itemID);
   }
@@ -103,6 +129,9 @@ function buildMaps() {
     stargateTypes,
     celestials,
     asteroidBelts,
+    landscapeDungeonTemplates,
+    landscapeEcosystems,
+    landscapeSites,
     stargates,
     attributes,
     solarSystemsById,
@@ -111,10 +140,14 @@ function buildMaps() {
     stargateTypesById,
     celestialsById,
     asteroidBeltsById,
+    landscapeDungeonTemplatesById,
+    landscapeEcosystemsById,
+    landscapeSitesById,
     stationsBySystem,
     celestialsById,
     celestialsBySystem,
     asteroidBeltsBySystem,
+    landscapeSitesBySystem,
     stargatesById,
     stargatesBySystem,
     movementByTypeId,
@@ -125,7 +158,7 @@ function ensureLoaded() {
   if (!cache) {
     cache = buildMaps();
     log.info(
-      `[SpaceWorld] Loaded ${cache.solarSystems.length} systems, ${cache.stations.length} stations, ${cache.stationTypes.length} station types, ${cache.celestials.length} celestials, ${cache.asteroidBelts.length} asteroid belts, ${cache.stargates.length} stargates`,
+      `[SpaceWorld] Loaded ${cache.solarSystems.length} systems, ${cache.stations.length} stations, ${cache.stationTypes.length} station types, ${cache.celestials.length} celestials, ${cache.asteroidBelts.length} asteroid belts, ${cache.landscapeSites.length} landscape sites, ${cache.landscapeEcosystems.length} landscape ecosystems, ${cache.landscapeDungeonTemplates.length} landscape dungeons, ${cache.stargates.length} stargates`,
     );
   }
 
@@ -179,6 +212,28 @@ function getAsteroidBeltByID(asteroidBeltID) {
   return ensureLoaded().asteroidBeltsById.get(Number(asteroidBeltID)) || null;
 }
 
+function getLandscapeSitesForSystem(solarSystemID) {
+  return [
+    ...(ensureLoaded().landscapeSitesBySystem.get(Number(solarSystemID)) || []),
+  ];
+}
+
+function getLandscapeSiteByID(siteID) {
+  return ensureLoaded().landscapeSitesById.get(Number(siteID)) || null;
+}
+
+function getLandscapeEcosystemByID(ecosystemID) {
+  return ensureLoaded().landscapeEcosystemsById.get(Number(ecosystemID)) || null;
+}
+
+function getLandscapeEcosystems() {
+  return [...ensureLoaded().landscapeEcosystems];
+}
+
+function getLandscapeDungeonTemplateByID(dungeonID) {
+  return ensureLoaded().landscapeDungeonTemplatesById.get(Number(dungeonID)) || null;
+}
+
 function getCelestialsForSystem(solarSystemID) {
   return [
     ...(ensureLoaded().celestialsBySystem.get(Number(solarSystemID)) || []),
@@ -209,6 +264,7 @@ function getStaticSceneForSystem(solarSystemID) {
     ...getStationsForSystem(numericSystemID),
     ...getStructuresForSystem(numericSystemID),
     ...getAsteroidBeltsForSystem(numericSystemID),
+    ...getLandscapeSitesForSystem(numericSystemID),
     ...getCelestialsForSystem(numericSystemID),
     ...getStargatesForSystem(numericSystemID),
   ];
@@ -233,6 +289,11 @@ module.exports = {
   getStationsForSystem,
   getAsteroidBeltByID,
   getAsteroidBeltsForSystem,
+  getLandscapeSiteByID,
+  getLandscapeSitesForSystem,
+  getLandscapeEcosystemByID,
+  getLandscapeEcosystems,
+  getLandscapeDungeonTemplateByID,
   getCelestialByID,
   getStructureByID,
   getStructuresForSystem,

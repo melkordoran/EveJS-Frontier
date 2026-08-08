@@ -32,6 +32,9 @@ const {
   getCharacterSkillPointTotal,
 } = require(path.join(__dirname, "../skills/skillState"));
 const {
+  normalizeActivationStateForProfile,
+} = require(path.join(__dirname, "../dogma/dogmaInfoCompatibility"));
+const {
   undockSession,
   ejectSession,
   boardSpaceShip,
@@ -553,36 +556,39 @@ class ShipService extends BaseService {
       this._buildPackedInstanceRow(buildModuleStatusSnapshot(item)),
     ]);
 
-    return [
-      {
-        type: "dict",
-        entries: [
-          [
-            shipID,
-            this._buildPackedInstanceRow({
-              itemID: shipID,
-              damage: shipCondition.damage,
-              charge: shipCondition.charge,
-              armorDamage: shipCondition.armorDamage,
-              shieldCharge: shipCondition.shieldCharge,
-              incapacitated: shipCondition.incapacitated,
-            }),
+    return normalizeActivationStateForProfile(
+      [
+        {
+          type: "dict",
+          entries: [
+            [
+              shipID,
+              this._buildPackedInstanceRow({
+                itemID: shipID,
+                damage: shipCondition.damage,
+                charge: shipCondition.charge,
+                armorDamage: shipCondition.armorDamage,
+                shieldCharge: shipCondition.shieldCharge,
+                incapacitated: shipCondition.incapacitated,
+              }),
+            ],
+            [
+              charID,
+              this._buildPackedInstanceRow({
+                itemID: charID,
+                online: true,
+                skillPoints,
+              }),
+            ],
+            ...moduleEntries,
           ],
-          [
-            charID,
-            this._buildPackedInstanceRow({
-              itemID: charID,
-              online: true,
-              skillPoints,
-            }),
-          ],
-          ...moduleEntries,
-        ],
-      },
-      this._buildChargeStateDict(charID, shipID),
-      buildWeaponBankStateDict(shipID, { characterID: charID }),
-      buildActivationHeatStateDict(buildCurrentFileTime()),
-    ];
+        },
+        this._buildChargeStateDict(charID, shipID),
+        buildWeaponBankStateDict(shipID, { characterID: charID }),
+        buildActivationHeatStateDict(buildCurrentFileTime()),
+      ],
+      session && session.compatibilityProfile,
+    );
   }
 
   _buildStatusRow({

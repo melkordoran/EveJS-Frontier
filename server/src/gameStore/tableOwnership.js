@@ -96,6 +96,18 @@ define(["npcControlState"], {
   domain: "in-space",
   confidence: CONFIDENCE.SCANNER,
 });
+define(["frontierLandscapeCustomSites"], {
+  tier: TIERS.RUNTIME,
+  domain: "in-space",
+  confidence: CONFIDENCE.SCANNER,
+  note: "Persistent Frontier landscape anchors authored through the landscape GM command.",
+});
+define(["frontierRiftSites"], {
+  tier: TIERS.RUNTIME,
+  domain: "in-space",
+  confidence: CONFIDENCE.SCANNER,
+  note: "Persistent Frontier Crude Rift anchors authored through the Rift GM command.",
+});
 define(
   [
     "npcEntities",
@@ -250,13 +262,15 @@ define(
     "characterCreationSchools", "clientEntityStandings", "clientTypeLists", "dbuffCollections",
     "dungeonAuthority", "dynamicItemAttributes", "evermarksCatalog", "expertSystems",
     "explorationAuthority", "explorationWormholeStatic", "factions", "fighterAbilities",
-    "industryBlueprints", "industryFacilities", "itemIcons", "itemTypes", "mapTagsAuthority",
+    "creationHardpointTypes", "creationModules", "creationParts", "creationTemplates",
+    "frontierDungeonTemplates", "industryBlueprints", "industryFacilities", "itemIcons", "itemTypes", "landscapeDungeonTemplates",
+    "landscapeEcosystems", "landscapeSites", "mapTagsAuthority",
     "missionAuthority", "movementAttributes", "npcBehaviorProfiles",
     "npcHostileUtilities", "npcLoadouts", "npcLootTables", "npcProfiles", "npcSpawnGroups",
     "npcSpawnPools", "npcStandingsAuthority", "npcStartupRules", "planetSchematics",
     "reprocessingClientRandomizedMaterials", "reprocessingStatic", "shipCosmeticsCatalog",
     "shipDogmaAttributes", "shipInsurancePrices", "shipTypes", "skillTrainingAlphaCaps",
-    "skillTypes", "solarSystems", "sovereigntyStatic", "stargateTypes", "stargateVisualOverrides",
+    "skillTypes", "solarSystems", "spaceComponentsByType", "sovereigntyStatic", "stargateTypes", "stargateVisualOverrides",
     "stargates", "starterShipFittings", "stationGraphicLocators", "stationStandingsRestrictions",
     "stationTypes", "stations", "structureGraphicLocators", "structureTypes",
     "trigDrifterSpawnAuthority", "typeDogma",

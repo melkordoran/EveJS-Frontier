@@ -35,6 +35,7 @@ function createDestinyWarpUpdateBuilders(deps = {}) {
     ENABLE_PILOT_WARP_FACTOR_OPTION_A,
     ENABLE_PILOT_WARP_MAX_SPEED_RAMP,
     ENABLE_PILOT_WARP_SOLVER_ASSIST_OPTION_B,
+    INDIVIDUAL_WARP_FACTORS,
     MAX_SUBWARP_SPEED_FRACTION,
     PILOT_WARP_FACTOR_OPTION_A_SCALE,
     PILOT_WARP_SOLVER_ASSIST_LEAD_MS,
@@ -135,19 +136,6 @@ function createDestinyWarpUpdateBuilders(deps = {}) {
     ];
   }
 
-  function buildPilotWarpActivationStateRefreshUpdates(
-    entity,
-    stamp,
-    simFileTime = currentFileTime(),
-  ) {
-    return [
-      {
-        stamp,
-        payload: destiny.buildAddBalls2Payload(stamp, [entity], simFileTime),
-      },
-    ];
-  }
-
   function getNominalWarpFactor(entity, warpState) {
     const authoredWarpSpeedAU = toFiniteNumber(entity && entity.warpSpeedAU, 0);
     return Math.max(
@@ -157,6 +145,20 @@ function createDestinyWarpUpdateBuilders(deps = {}) {
         Math.round((authoredWarpSpeedAU > 0 ? authoredWarpSpeedAU : 3) * 1000),
       ),
     );
+  }
+
+  function buildIndividualWarpFactorsUpdate(entity, stamp) {
+    if (!INDIVIDUAL_WARP_FACTORS) {
+      return null;
+    }
+    return {
+      stamp,
+      payload: destiny.buildSetBallWarpFactorsPayload(
+        entity.itemID,
+        INDIVIDUAL_WARP_FACTORS.acceleration,
+        INDIVIDUAL_WARP_FACTORS.deceleration,
+      ),
+    };
   }
 
   function getPilotWarpFactorOptionA(entity, warpState) {
@@ -452,8 +454,9 @@ function createDestinyWarpUpdateBuilders(deps = {}) {
   }
 
   function getPilotWarpNativeActivationSpeedFloor(entity) {
+    const nativeMaximumSpeed = getPilotWarpActivationSeedSpeed(entity);
     return Math.max(
-      (toFiniteNumber(entity && entity.maxVelocity, 0) *
+      (nativeMaximumSpeed *
         WARP_NATIVE_ACTIVATION_SPEED_FRACTION) +
         WARP_NATIVE_ACTIVATION_SPEED_MARGIN_MS,
       WARP_NATIVE_ACTIVATION_SPEED_MARGIN_MS,
@@ -464,19 +467,18 @@ function createDestinyWarpUpdateBuilders(deps = {}) {
     const currentVelocity = cloneVector(entity && entity.velocity);
     const currentSpeed = magnitude(currentVelocity);
     const activationSpeedFloor = getPilotWarpNativeActivationSpeedFloor(entity);
-    let resolvedVelocity = currentVelocity;
-
-    if (currentSpeed + 0.0001 < activationSpeedFloor) {
-      const targetPoint = cloneVector(
-        warpState && warpState.targetPoint,
-        entity && entity.targetPoint,
-      );
-      const direction = normalizeVector(
-        subtractVectors(targetPoint, cloneVector(entity && entity.position)),
-        cloneVector(entity && entity.direction, DEFAULT_RIGHT),
-      );
-      resolvedVelocity = scaleVector(direction, activationSpeedFloor);
-    }
+    const targetPoint = cloneVector(
+      warpState && (warpState.rawDestination || warpState.targetPoint),
+      entity && entity.targetPoint,
+    );
+    const direction = normalizeVector(
+      subtractVectors(targetPoint, cloneVector(entity && entity.position)),
+      cloneVector(entity && entity.direction, DEFAULT_RIGHT),
+    );
+    const resolvedVelocity = scaleVector(
+      direction,
+      Math.max(currentSpeed, activationSpeedFloor),
+    );
 
     if (magnitude(resolvedVelocity) <= 0.5) {
       return null;
@@ -504,7 +506,12 @@ function createDestinyWarpUpdateBuilders(deps = {}) {
     };
   }
 
-  function primePilotWarpActivationState(entity, warpState, warpStartStamp) {
+  function primePilotWarpActivationState(
+    entity,
+    warpState,
+    warpStartStamp,
+    options = {},
+  ) {
     if (!entity || !warpState) {
       return warpState || null;
     }
@@ -518,8 +525,16 @@ function createDestinyWarpUpdateBuilders(deps = {}) {
     warpState.cruiseBumpStamp = shouldSchedulePilotWarpCruiseBump(warpState)
       ? getPilotWarpCruiseBumpStamp(resolvedStamp, warpState)
       : null;
-    warpState.effectAtMs = getPilotWarpEffectAtMs(warpState);
-    warpState.effectStamp = getPilotWarpEffectStamp(resolvedStamp, warpState);
+    const effectDelayDestinyTicks = Math.max(
+      0,
+      toInt(options.effectDelayDestinyTicks, 0),
+    );
+    warpState.effectAtMs = getPilotWarpEffectAtMs(warpState) +
+      (effectDelayDestinyTicks * DESTINY_STAMP_INTERVAL_MS);
+    warpState.effectStamp = advanceDestinyStamp(
+      getPilotWarpEffectStamp(resolvedStamp, warpState),
+      effectDelayDestinyTicks,
+    );
     warpState.pilotMaxSpeedRamp = buildPilotWarpMaxSpeedRamp(
       entity,
       warpState,
@@ -552,20 +567,43 @@ function createDestinyWarpUpdateBuilders(deps = {}) {
     };
   }
 
-  function buildWarpPrepareDispatch(entity, stamp, warpState) {
+  function buildWarpPrepareDispatch(entity, stamp, warpState, options = {}) {
     const sharedUpdates = tagUpdatesRequireExistingVisibility([
+      buildIndividualWarpFactorsUpdate(entity, stamp),
       buildWarpPrepareCommandUpdate(entity, stamp, warpState),
       {
         stamp,
         payload: destiny.buildSetSpeedFractionPayload(entity.itemID, 1),
       },
-    ]);
+    ].filter(Boolean));
     const pilotPrepareUpdates = [
+      buildIndividualWarpFactorsUpdate(entity, stamp),
       buildPilotWarpSeedUpdate(entity, stamp),
-      sharedUpdates[0],
-      buildWarpStartEffectUpdate(entity, stamp),
-      sharedUpdates[1],
-    ];
+      buildWarpPrepareCommandUpdate(entity, stamp, warpState),
+    ].filter(Boolean);
+    if (options.includePilotActivationVelocity === true) {
+      const activationVelocityUpdate = buildWarpActivationVelocityUpdate(
+        entity,
+        stamp,
+        warpState,
+      );
+      if (activationVelocityUpdate) {
+        pilotPrepareUpdates.push(activationVelocityUpdate);
+      }
+    }
+    // Keep WarpTo, the native alignment seed, and FX in one Michelle history
+    // batch. A later FX-only batch can rebase the just-authored warp target.
+    pilotPrepareUpdates.push({
+      stamp,
+      payload: destiny.buildSetSpeedFractionPayload(entity.itemID, 1),
+    });
+    if (options.includePilotEffect !== false) {
+      pilotPrepareUpdates.splice(
+        pilotPrepareUpdates.length - 1,
+        0,
+        buildWarpStartEffectUpdate(entity, stamp),
+      );
+    }
 
     return {
       sharedUpdates,
@@ -623,13 +661,14 @@ function createDestinyWarpUpdateBuilders(deps = {}) {
         ? normalizeDestinyStamp(getNextStamp(), 0)
         : normalizeDestinyStamp(stampOverride, getNextStamp());
     const updates = tagUpdatesRequireExistingVisibility([
+      buildIndividualWarpFactorsUpdate(entity, stamp),
       buildWarpStartCommandUpdate(entity, stamp, warpState),
       buildWarpStartEffectUpdate(entity, stamp),
       {
         stamp,
         payload: destiny.buildSetBallMassivePayload(entity.itemID, false),
       },
-    ]);
+    ].filter(Boolean));
     const warpCommandIndex = updates.findIndex((update) => (
       Array.isArray(update && update.payload) && update.payload[0] === "WarpTo"
     ));
@@ -669,7 +708,6 @@ function createDestinyWarpUpdateBuilders(deps = {}) {
     buildPilotPreWarpAddBallUpdate,
     buildPilotPreWarpRebaselineUpdates,
     buildPilotWarpEgoStateRefreshUpdates,
-    buildPilotWarpActivationStateRefreshUpdates,
     getNominalWarpFactor,
     getPilotWarpFactorOptionA,
     buildWarpStartCommandUpdate,

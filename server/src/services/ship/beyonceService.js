@@ -6,6 +6,7 @@ const log = require(path.join(__dirname, "../../utils/logger"));
 const config = require(path.join(__dirname, "../../config"));
 const {
   buildBoundObjectResponse,
+  buildDict,
   extractDictEntries,
   normalizeNumber,
   normalizeText,
@@ -27,6 +28,10 @@ const worldData = require(path.join(__dirname, "../../space/worldData"));
 const mobileAnalysisBeaconRuntime = require(path.join(__dirname, "./mobileAnalysisBeaconRuntime"));
 const mobileMicroJumpUnitRuntime = require(path.join(__dirname, "./mobileMicroJumpUnitRuntime"));
 const mobileSiphonUnitRuntime = require(path.join(__dirname, "./mobileSiphonUnitRuntime"));
+const frontierDeploymentRuntime = require(path.join(
+  __dirname,
+  "../frontier/deploymentRuntime",
+));
 const {
   jumpSessionViaStargate,
   jumpSessionToSolarSystem,
@@ -82,6 +87,9 @@ const bookmarkNotifications = require(path.join(__dirname, "../bookmark/bookmark
 const {
   buildBookmarkReplyTuple,
 } = require(path.join(__dirname, "../bookmark/bookmarkPayloads"));
+const {
+  buildDestinyConfigurationSettings,
+} = require(path.join(__dirname, "destinyCompatibility"));
 const {
   resolveLocationBookmarkTarget,
 } = require(path.join(__dirname, "../bookmark/bookmarkTargetResolver"));
@@ -1754,6 +1762,13 @@ class BeyonceService extends BaseService {
     }
   }
 
+  Handle_GetDestinyConfigurationSettings(args, session) {
+    void args;
+    return buildDestinyConfigurationSettings(
+      session && session.compatibilityProfile,
+    );
+  }
+
   Handle_GetFormations(args, session) {
     // Docked structure exterior view is a view toggle, not a fresh space login.
     // The stock client may return to hangar without re-fetching hangar state,
@@ -1799,6 +1814,7 @@ class BeyonceService extends BaseService {
       method: "GetFormations",
       versionCheck: "run",
       proxyCache: true,
+      compatibilityProfile: session && session.compatibilityProfile,
     });
   }
 
@@ -2346,10 +2362,66 @@ class BeyonceService extends BaseService {
     return true;
   }
 
-  Handle_CallComponentFromClient(args, session) {
+  Handle_CallComponentFromClient(args, session, kwargs) {
     const itemID = normalizeNumber(args && args[0], 0);
     const componentName = normalizeText(args && args[1], "");
     const methodName = normalizeText(args && args[2], "");
+    const componentArgs = Array.isArray(args && args[3]) ? args[3] : [];
+    const componentKwargs = args && args[4] ? args[4] : kwargs;
+
+    if (componentName === "assemblyConstruction") {
+      if (methodName === "get_deposited_items_by_type") {
+        const result = frontierDeploymentRuntime.getDepositedItemsByType(
+          session,
+          itemID,
+        );
+        if (!result || result.success !== true) {
+          throwWrappedUserError("CustomNotify", {
+            notify: `Construction inventory request failed: ${result && result.errorMsg || "UNKNOWN"}`,
+          });
+        }
+        return buildDict(
+          Object.entries(result.data || {}).map(([typeID, quantity]) => ([
+            normalizeNumber(typeID, 0),
+            normalizeNumber(quantity, 0),
+          ])),
+        );
+      }
+
+      if (methodName === "deposit_items") {
+        const inventoryID = normalizeNumber(
+          getKwargValue(componentKwargs, "inventory_id") ?? componentArgs[0],
+          0,
+        );
+        const quantities =
+          getKwargValue(componentKwargs, "qty_by_type_id") ?? componentArgs[1];
+        const result = frontierDeploymentRuntime.depositItems(
+          session,
+          itemID,
+          inventoryID,
+          quantities,
+        );
+        if (!result || result.success !== true) {
+          throwWrappedUserError("CustomNotify", {
+            notify: `Construction deposit failed: ${result && result.errorMsg || "UNKNOWN"}`,
+          });
+        }
+        return null;
+      }
+
+      if (methodName === "gm_complete_construction") {
+        const result = frontierDeploymentRuntime.completeConstruction(itemID, {
+          force: true,
+          session,
+        });
+        if (!result || result.success !== true) {
+          throwWrappedUserError("CustomNotify", {
+            notify: `Construction completion failed: ${result && result.errorMsg || "UNKNOWN"}`,
+          });
+        }
+        return null;
+      }
+    }
 
     if (
       componentName === "microJumpDriver" &&
@@ -2549,6 +2621,24 @@ class BeyonceService extends BaseService {
     return null;
   }
 
+  Handle_CmdSetPitch(args, session) {
+    const pitch = normalizeNumber(args && args[0], 0);
+    log.info(
+      `[Beyonce] CmdSetPitch char=${session && session.characterID} pitch=${pitch}`,
+    );
+    spaceRuntime.setPitch(session, pitch);
+    return null;
+  }
+
+  Handle_CmdSetYawRate(args, session) {
+    const yawRate = normalizeNumber(args && args[0], 0);
+    log.info(
+      `[Beyonce] CmdSetYawRate char=${session && session.characterID} yawRate=${yawRate}`,
+    );
+    spaceRuntime.setYawRate(session, yawRate);
+    return null;
+  }
+
   Handle_CmdStop(args, session) {
     this._enforceMovementCommandThrottle(session, "CmdStop");
     log.info(`[Beyonce] CmdStop char=${session && session.characterID}`);
@@ -2738,7 +2828,10 @@ class BeyonceService extends BaseService {
           errorMsg: "FLEET_MEMBER_WARP_TARGET_NOT_FOUND",
         };
       }
-    } else if ((warpType === "item" || !warpType) && numericTarget > 0) {
+    } else if (
+      (warpType === "item" || warpType === "deployable" || !warpType) &&
+      numericTarget > 0
+    ) {
       const scene = spaceRuntime.getSceneForSession(session);
       const entity =
         scene && typeof scene.getEntityByID === "function"

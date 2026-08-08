@@ -78,6 +78,8 @@ function inferDestinyContract(updates = [], options = {}) {
     name === "LaunchMissile" ||
     name === "Orbit" ||
     name === "FollowBall" ||
+    name === "SetPitch" ||
+    name === "SetYawRate" ||
     name === "Stop" ||
     name === "WarpTo"
   ));
@@ -90,6 +92,7 @@ function inferDestinyContract(updates = [], options = {}) {
     name === "SetBallMassive" ||
     name === "SetSpeedFraction" ||
     name === "SetBallVelocity" ||
+    name === "SetBallWarpFactors" ||
     name === "SetBallPosition"
   ));
   const hasFreshAcquireLifecycle = Array.isArray(updates) && updates.some(

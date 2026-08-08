@@ -6,6 +6,9 @@ const {
   encodePayload,
   getActiveCharacterID,
 } = require("./gatewayServiceHelpers");
+const {
+  getFrontierCoreProtoTypes,
+} = require("./frontierCoreProto");
 const chatRuntime = require(path.join(
   __dirname,
   "../../chat/chatRuntime",
@@ -16,6 +19,8 @@ const sessionRegistry = require(path.join(
 ));
 
 const HANDLED_REQUEST_TYPES = Object.freeze([
+  "eve_public.chat.local.GetMembershipRequest",
+  "eve_public.chat.local.BroadcastMessageRequest",
   "eve_public.chat.local.api.GetMembershipListRequest",
   "eve_public.chat.local.api.BroadcastMessageRequest",
   "eve_public.chat.local.api.admin.MuteRequest",
@@ -287,6 +292,7 @@ const TYPES = Object.freeze({
     "eve_public.chat.local.api.admin.MuteResponse",
   ),
 });
+const FRONTIER_TYPES = Object.freeze(getFrontierCoreProtoTypes());
 
 let noticesBound = false;
 
@@ -368,6 +374,17 @@ function buildMembershipPayload(payload) {
   };
 }
 
+function buildFrontierMembershipPayload(payload) {
+  return {
+    characters: (
+      Array.isArray(payload && payload.members) ? payload.members : []
+    ).map((member) => buildCharacterIdentifier(
+      member && member.character && member.character.sequential,
+    )),
+    solar_system: buildSolarSystemIdentifier(payload && payload.solarSystemID),
+  };
+}
+
 function buildSuccessResult(responseTypeName, messageType, payload = {}) {
   return {
     statusCode: 200,
@@ -424,6 +441,15 @@ function bindRuntimeNotices(context) {
         character: Number(event.targetCharacterID) || 0,
       },
     );
+    publishTypedNotice(
+      context,
+      "eve_public.chat.local.MembershipNotice",
+      FRONTIER_TYPES.chatMembershipNotice,
+      buildFrontierMembershipPayload(event),
+      {
+        character: Number(event.targetCharacterID) || 0,
+      },
+    );
   });
 
   chatRuntime.on("local-membership-refresh", (event) => {
@@ -460,6 +486,20 @@ function bindRuntimeNotices(context) {
         solar_system: Number(event.solarSystemID) || 0,
       },
     );
+    publishTypedNotice(
+      context,
+      "eve_public.chat.local.EnterNotice",
+      FRONTIER_TYPES.chatEnterNotice,
+      {
+        character: buildCharacterIdentifier(
+          event.member && event.member.character && event.member.character.sequential,
+        ),
+        solar_system: buildSolarSystemIdentifier(event.solarSystemID),
+      },
+      {
+        solar_system: Number(event.solarSystemID) || 0,
+      },
+    );
   });
 
   chatRuntime.on("local-leave", (event) => {
@@ -470,6 +510,18 @@ function bindRuntimeNotices(context) {
       context,
       "eve_public.chat.local.api.LeaveNotice",
       TYPES.leaveNotice,
+      {
+        character: buildCharacterIdentifier(event.characterID),
+        solar_system: buildSolarSystemIdentifier(event.solarSystemID),
+      },
+      {
+        solar_system: Number(event.solarSystemID) || 0,
+      },
+    );
+    publishTypedNotice(
+      context,
+      "eve_public.chat.local.ExitNotice",
+      FRONTIER_TYPES.chatExitNotice,
       {
         character: buildCharacterIdentifier(event.characterID),
         solar_system: buildSolarSystemIdentifier(event.solarSystemID),
@@ -497,6 +549,21 @@ function bindRuntimeNotices(context) {
         solar_system: Number(event.solarSystemID) || 0,
       },
     );
+    publishTypedNotice(
+      context,
+      "eve_public.chat.local.MessageBroadcastNotice",
+      FRONTIER_TYPES.chatMessageBroadcastNotice,
+      {
+        author: buildCharacterIdentifier(event.authorCharacterID),
+        solar_system: buildSolarSystemIdentifier(event.solarSystemID),
+        message: {
+          content: String(event.message || ""),
+        },
+      },
+      {
+        solar_system: Number(event.solarSystemID) || 0,
+      },
+    );
   });
 }
 
@@ -512,6 +579,20 @@ function createLocalChatGatewayService(context = {}) {
     handleRequest(requestTypeName, requestEnvelope) {
       const session = resolveSession(requestEnvelope);
       if (!session) {
+        if (requestTypeName === "eve_public.chat.local.GetMembershipRequest") {
+          return buildErrorResult(
+            404,
+            "active character session not found",
+            "eve_public.chat.local.GetMembershipResponse",
+          );
+        }
+        if (requestTypeName === "eve_public.chat.local.BroadcastMessageRequest") {
+          return buildErrorResult(
+            404,
+            "active character session not found",
+            "eve_public.chat.local.BroadcastMessageResponse",
+          );
+        }
         if (
           requestTypeName === "eve_public.chat.local.api.GetMembershipListRequest"
         ) {
@@ -539,6 +620,39 @@ function createLocalChatGatewayService(context = {}) {
             "eve_public.chat.local.api.admin.MuteResponse",
           );
         }
+      }
+
+      if (requestTypeName === "eve_public.chat.local.GetMembershipRequest") {
+        decodePayload(FRONTIER_TYPES.chatGetMembershipRequest, requestEnvelope);
+        const payload = chatRuntime.publishLocalMembershipListForSession(session);
+        return buildSuccessResult(
+          "eve_public.chat.local.GetMembershipResponse",
+          FRONTIER_TYPES.chatGetMembershipResponse,
+          buildFrontierMembershipPayload(payload),
+        );
+      }
+
+      if (requestTypeName === "eve_public.chat.local.BroadcastMessageRequest") {
+        const payload = decodePayload(
+          FRONTIER_TYPES.chatBroadcastMessageRequest,
+          requestEnvelope,
+        );
+        try {
+          chatRuntime.broadcastLocalMessage(
+            session,
+            payload && payload.message && payload.message.content,
+          );
+        } catch (error) {
+          return buildErrorResult(
+            error && error.code === "muted" ? 403 : 400,
+            error && error.message ? error.message : "broadcast failed",
+            "eve_public.chat.local.BroadcastMessageResponse",
+          );
+        }
+        return buildSuccessResult(
+          "eve_public.chat.local.BroadcastMessageResponse",
+          FRONTIER_TYPES.chatBroadcastMessageResponse,
+        );
       }
 
       if (requestTypeName === "eve_public.chat.local.api.GetMembershipListRequest") {
@@ -593,6 +707,8 @@ function createLocalChatGatewayService(context = {}) {
 }
 
 module.exports = {
+  FRONTIER_TYPES,
   LOCAL_CHAT_PROTO_ROOT,
+  buildFrontierMembershipPayload,
   createLocalChatGatewayService,
 };

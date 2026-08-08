@@ -80,6 +80,10 @@ const GENERATED_TABLES = new Set([
   "characterCreationRaces",
   "characterCreationSchools",
   "clientTypeLists",
+  "creationHardpointTypes",
+  "creationModules",
+  "creationParts",
+  "creationTemplates",
   "corporations",
   "dbuffCollections",
   "dynamicItemAttributes",
@@ -88,6 +92,10 @@ const GENERATED_TABLES = new Set([
   "industryFacilities",
   "itemIcons",
   "itemTypes",
+  "frontierDungeonTemplates",
+  "landscapeDungeonTemplates",
+  "landscapeEcosystems",
+  "landscapeSites",
   "mapTagsAuthority",
   "movementAttributes",
   "npcCargo",
@@ -100,6 +108,7 @@ const GENERATED_TABLES = new Set([
   "shipTypes",
   "skillTypes",
   "solarSystems",
+  "spaceComponentsByType",
   "sovereigntyStatic",
   "stargates",
   "stargateTypes",
@@ -138,6 +147,10 @@ const REQUIRED_TABLES = [
   "characters",
   "clientEntityStandings",
   "clientTypeLists",
+  "creationHardpointTypes",
+  "creationModules",
+  "creationParts",
+  "creationTemplates",
   "corporationBills",
   "corporationGoals",
   "corporationRuntime",
@@ -165,6 +178,10 @@ const REQUIRED_TABLES = [
   "itemIcons",
   "items",
   "itemTypes",
+  "frontierDungeonTemplates",
+  "landscapeDungeonTemplates",
+  "landscapeEcosystems",
+  "landscapeSites",
   "killRights",
   "killmails",
   "lpWallets",
@@ -232,6 +249,7 @@ const REQUIRED_TABLES = [
   "skillTypes",
   "solarSystemInterferenceState",
   "solarSystems",
+  "spaceComponentsByType",
   "sovereignty",
   "sovereigntyStatic",
   "stargates",
@@ -1129,10 +1147,18 @@ function clientTypeListCounts(rows) {
 }
 
 function skillLevelRecords(skills) {
-  return (Array.isArray(skills) ? skills : []).map((skill) => ({
-    typeID: toInt(skill._key || skill.typeID, 0),
-    level: toInt(skill._value || skill.level, 0),
-  }));
+  const records = Array.isArray(skills)
+    ? skills
+    : skills && typeof skills === "object"
+      ? Object.entries(skills).map(([typeID, level]) => ({ typeID, level }))
+      : [];
+
+  return records
+    .map((skill) => ({
+      typeID: toInt(skill && (skill._key ?? skill.typeID), 0),
+      level: toInt(skill && (skill._value ?? skill.level), 0),
+    }))
+    .filter((skill) => skill.typeID > 0);
 }
 
 function characterCreationRaceRecord(row, typeByID) {
@@ -1966,12 +1992,12 @@ function nullableDogmaInt(row, key) {
 
 function dogmaEffectRecord(row) {
   return {
-    effectID: toInt(row._key),
-    name: row.name || "",
+    effectID: toInt(row.effectID ?? row._key),
+    name: row.name || row.effectName || "",
     displayName: localName(row.displayName),
     description: localName(row.description),
     guid: row.guid || "",
-    effectCategoryID: toInt(row.effectCategoryID, 0),
+    effectCategoryID: toInt(row.effectCategoryID ?? row.effectCategory, 0),
     iconID: nullableDogmaInt(row, "iconID"),
     dischargeAttributeID: nullableDogmaInt(row, "dischargeAttributeID"),
     durationAttributeID: nullableDogmaInt(row, "durationAttributeID"),
@@ -2745,7 +2771,15 @@ async function loadSdeAuthority(sdeDir) {
   const typeMaterials = [];
   const dbuffCollections = [];
   const dynamicItemAttributes = [];
+  const creationHardpointTypes = [];
+  const creationModules = [];
+  const creationParts = [];
+  const creationTemplates = [];
   const icons = [];
+  const frontierDungeonTemplates = [];
+  const landscapeDungeonTemplates = [];
+  const landscapeEcosystems = [];
+  const landscapeSites = [];
   const clientTypeLists = [];
   const planetResources = [];
   const planetSchematics = [];
@@ -2753,6 +2787,7 @@ async function loadSdeAuthority(sdeDir) {
   const skins = [];
   const skinMaterials = [];
   const skinLicenses = [];
+  const spaceComponentsByType = [];
   const sdeMeta = {};
 
   await readJsonlRecords(sdeDir, "_sde.jsonl", (row) => {
@@ -3029,6 +3064,21 @@ async function loadSdeAuthority(sdeDir) {
   await readJsonlRecords(sdeDir, "typeMaterials.jsonl", (row) => typeMaterials.push(row));
   await readJsonlRecords(sdeDir, "dbuffCollections.jsonl", (row) => dbuffCollections.push(row));
   await readJsonlRecords(sdeDir, "dynamicItemAttributes.jsonl", (row) => dynamicItemAttributes.push(row));
+  await readJsonlRecords(sdeDir, "creationHardpointTypes.jsonl", (row) => {
+    creationHardpointTypes.push({
+      ...row,
+      hardpointType: String(row._key || ""),
+    });
+  });
+  await readJsonlRecords(sdeDir, "creationModules.jsonl", (row) => {
+    creationModules.push({ ...row, typeID: toInt(row._key, 0) });
+  });
+  await readJsonlRecords(sdeDir, "creationParts.jsonl", (row) => {
+    creationParts.push({ ...row, graphicID: toInt(row._key, 0) });
+  });
+  await readJsonlRecords(sdeDir, "creationTemplates.jsonl", (row) => {
+    creationTemplates.push({ ...row, typeID: toInt(row._key, 0) });
+  });
   await readJsonlRecords(sdeDir, "icons.jsonl", (row) => icons.push(row));
   await readJsonlRecords(sdeDir, "typeLists.jsonl", (row) => clientTypeLists.push(row));
   await readJsonlRecords(sdeDir, "planetResources.jsonl", (row) => planetResources.push(row));
@@ -3037,9 +3087,68 @@ async function loadSdeAuthority(sdeDir) {
   await readJsonlRecords(sdeDir, "skins.jsonl", (row) => skins.push(row));
   await readJsonlRecords(sdeDir, "skinMaterials.jsonl", (row) => skinMaterials.push(row));
   await readJsonlRecords(sdeDir, "skinLicenses.jsonl", (row) => skinLicenses.push(row));
+  await readJsonlRecords(sdeDir, "spaceComponentsByType.jsonl", (row) => {
+    spaceComponentsByType.push({
+      ...row,
+      typeID: toInt(row._key),
+    });
+  });
+  await readJsonlRecords(sdeDir, "frontierDungeonTemplates.jsonl", (row) => {
+    frontierDungeonTemplates.push({
+      ...row,
+      dungeonID: toInt(row.dungeonID ?? row._key, 0),
+    });
+  });
+  await readJsonlRecords(sdeDir, "landscapeDungeonTemplates.jsonl", (row) => {
+    landscapeDungeonTemplates.push({
+      ...row,
+      dungeonID: toInt(row.dungeonID ?? row._key, 0),
+    });
+  });
+  await readJsonlRecords(sdeDir, "landscapeEcosystems.jsonl", (row) => {
+    landscapeEcosystems.push({
+      ...row,
+      ecosystemID: toInt(row.ecosystemID ?? row._key, 0),
+    });
+  });
+  await readJsonlRecords(sdeDir, "landscapeSites.jsonl", (row) => {
+    const itemID = toInt(row.siteID ?? row._key, 0);
+    const typeID = toInt(row.typeID, 0);
+    const type = typeByID.get(typeID) || {};
+    landscapeSites.push({
+      itemID,
+      typeID,
+      groupID: toInt(type.groupID, 0),
+      categoryID: toInt(type.categoryID, 0),
+      groupName: type.groupName || "",
+      itemName: type.name || `Type ${typeID}`,
+      graphicID: toInt(type.graphicID, 0) || null,
+      radius: Math.max(1, toNumber(type.radius, 1)),
+      solarSystemID: toInt(row.solarSystemID, 0),
+      featureID: toInt(row.featureID, 0),
+      featureKind: String(row.featureKind || ""),
+      featureTags: Array.isArray(row.featureTags) ? [...row.featureTags] : [],
+      ecosystemID: toInt(row.ecosystemID, 0),
+      ecosystemName: String(row.ecosystemName || ""),
+      dungeonID: toInt(row.dungeonID, 0),
+      dungeonNameID: toInt(row.dungeonNameID, 0) || null,
+      archetypeID: toInt(row.archetypeID, 0) || null,
+      dungeonEntryObjectID: toInt(row.dungeonEntryObjectID, 0) || null,
+      position: roundVector(row.position, 3),
+      kind: "landscapeSite",
+    });
+  });
 
   stargates.sort((left, right) => left.itemID - right.itemID);
   celestials.sort((left, right) => left.itemID - right.itemID);
+  frontierDungeonTemplates.sort((left, right) => left.dungeonID - right.dungeonID);
+  landscapeDungeonTemplates.sort((left, right) => left.dungeonID - right.dungeonID);
+  landscapeEcosystems.sort((left, right) => left.ecosystemID - right.ecosystemID);
+  landscapeSites.sort((left, right) => left.itemID - right.itemID);
+  creationHardpointTypes.sort((left, right) => left.hardpointType.localeCompare(right.hardpointType));
+  creationModules.sort((left, right) => left.typeID - right.typeID);
+  creationParts.sort((left, right) => left.graphicID - right.graphicID);
+  creationTemplates.sort((left, right) => left.typeID - right.typeID);
 
   return {
     sdeMeta,
@@ -3066,8 +3175,16 @@ async function loadSdeAuthority(sdeDir) {
     typeMaterials,
     dbuffCollections,
     dynamicItemAttributes,
+    creationHardpointTypes,
+    creationModules,
+    creationParts,
+    creationTemplates,
     stationOperationsByID,
     icons,
+    frontierDungeonTemplates,
+    landscapeDungeonTemplates,
+    landscapeEcosystems,
+    landscapeSites,
     clientTypeLists,
     planetResources,
     planetSchematics,
@@ -3075,6 +3192,7 @@ async function loadSdeAuthority(sdeDir) {
     skins,
     skinMaterials,
     skinLicenses,
+    spaceComponentsByType,
   };
 }
 
@@ -3237,6 +3355,26 @@ function buildTables(authority, options) {
       typeLists: clientTypeLists,
       counts: clientTypeListCounts(clientTypeLists),
     },
+    creationHardpointTypes: {
+      source,
+      count: authority.creationHardpointTypes.length,
+      hardpointTypes: authority.creationHardpointTypes,
+    },
+    creationModules: {
+      source,
+      count: authority.creationModules.length,
+      modules: authority.creationModules,
+    },
+    creationParts: {
+      source,
+      count: authority.creationParts.length,
+      parts: authority.creationParts,
+    },
+    creationTemplates: {
+      source,
+      count: authority.creationTemplates.length,
+      templates: authority.creationTemplates,
+    },
     dbuffCollections: {
       source,
       counts: { collectionCount: Object.keys(dbuffCollectionsByID).length },
@@ -3264,6 +3402,26 @@ function buildTables(authority, options) {
     industryFacilities: buildIndustryFacilities(authority, source),
     itemIcons: buildItemIcons(authority, options, source),
     itemTypes: { source, count: itemTypes.length, types: itemTypes },
+    frontierDungeonTemplates: {
+      source,
+      count: authority.frontierDungeonTemplates.length,
+      dungeons: authority.frontierDungeonTemplates,
+    },
+    landscapeDungeonTemplates: {
+      source,
+      count: authority.landscapeDungeonTemplates.length,
+      dungeons: authority.landscapeDungeonTemplates,
+    },
+    landscapeEcosystems: {
+      source,
+      count: authority.landscapeEcosystems.length,
+      ecosystems: authority.landscapeEcosystems,
+    },
+    landscapeSites: {
+      source,
+      count: authority.landscapeSites.length,
+      sites: authority.landscapeSites,
+    },
     mapTagsAuthority: buildMapTagsAuthority(options),
     movementAttributes: {
       source,
@@ -3309,6 +3467,11 @@ function buildTables(authority, options) {
     shipTypes: { source, count: shipTypes.length, ships: shipTypes },
     skillTypes: { source, count: skillTypes.length, skills: skillTypes },
     solarSystems: { source, count: authority.solarSystems.length, solarSystems: authority.solarSystems },
+    spaceComponentsByType: {
+      source,
+      count: authority.spaceComponentsByType.length,
+      types: authority.spaceComponentsByType,
+    },
     sovereigntyStatic: buildSovereigntyStatic(authority, source),
     stargates: { source, count: authority.stargates.length, stargates: authority.stargates },
     stargateTypes: {
@@ -3560,6 +3723,7 @@ module.exports = {
   stationLocatorProfileByTypeID,
   buildCorporations,
   buildLocalAccountsAndCharacters,
+  skillLevelRecords,
   resolveBootstrapProfile,
   sanitizeAndValidateProductionMissionPolicy,
 };

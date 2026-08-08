@@ -67,6 +67,10 @@ const FREE_WIRE_CONFIG_FLAGS = (
   BALL_FLAG.IS_SPACEJUNK
 );
 
+function usesFrontierBallEncoding(options = {}) {
+  return String(options.compatibilityProfile || "").trim().toLowerCase() === "frontier";
+}
+
 function getLegacyFreeBallMode(entity) {
   const name = entity && typeof entity.mode === "string"
     ? entity.mode.trim().toUpperCase()
@@ -463,6 +467,147 @@ function encodeRigidBall(entity) {
   return Buffer.concat(chunks);
 }
 
+function appendFrontierCommonBallTail(chunks, entity) {
+  pushInt32(
+    chunks,
+    toInt32(entity && entity.surfaceType, -0x80000000),
+  );
+  // Frontier enables dynamical orientation before Michelle reads SetState.
+  // The native stream stores an identity quaternion as scalar + vector.
+  pushDouble(chunks, 1);
+  pushDouble(chunks, 0);
+  pushDouble(chunks, 0);
+  pushDouble(chunks, 0);
+  pushInt32(chunks, toInt32(entity && entity.collisionID, -1));
+  pushFloat(chunks, toFiniteNumber(entity && entity.collisionScale, 1));
+}
+
+function appendFrontierFreeBallConfiguration(chunks, entity) {
+  // Native defaults for dynamical orientation and individual warp factors.
+  pushFloat(chunks, Math.max(0, toFiniteNumber(entity && entity.maxAngularSpeed, 0)));
+  pushDouble(chunks, 0);
+  pushDouble(chunks, 0);
+  pushDouble(chunks, 0);
+  pushFloat(chunks, Math.max(0, toFiniteNumber(entity && entity.angularAgility, 1)));
+  pushDouble(chunks, -1);
+  pushDouble(chunks, -1);
+}
+
+function appendFrontierModeData(chunks, entity, mode) {
+  switch (mode) {
+    case BALL_MODE.GOTO: {
+      const targetPoint = getShipTargetPoint(entity);
+      pushFloat(chunks, getEntityFollowRange(entity));
+      pushDouble(chunks, targetPoint.x);
+      pushDouble(chunks, targetPoint.y);
+      pushDouble(chunks, targetPoint.z);
+      break;
+    }
+    case BALL_MODE.FOLLOW:
+    case BALL_MODE.ORBIT: {
+      const targetPoint = getShipTargetPoint(entity);
+      pushBigInt64(chunks, getEntityFollowID(entity));
+      pushFloat(chunks, getEntityFollowRange(entity));
+      pushDouble(chunks, targetPoint.x);
+      pushDouble(chunks, targetPoint.y);
+      pushDouble(chunks, targetPoint.z);
+      break;
+    }
+    case BALL_MODE.WARP: {
+      const targetPoint = getDestinyWarpTargetPoint(entity);
+      const warpState = entity && entity.warpState;
+      pushDouble(chunks, targetPoint.x);
+      pushDouble(chunks, targetPoint.y);
+      pushDouble(chunks, targetPoint.z);
+      // Frontier widened the native Ball::effectStamp field from int32 to
+      // Be::Time/int64 while retaining the remaining warp-mode union fields.
+      pushBigInt64(
+        chunks,
+        BigInt(toInt32(warpState && warpState.effectStamp, 0)),
+      );
+      pushDouble(
+        chunks,
+        toFiniteNumber(warpState && warpState.totalDistance, 0),
+      );
+      pushDouble(chunks, getDestinyWarpMinimumRange(entity));
+      pushBigInt64(chunks, getDestinyWarpOwnerID(entity));
+      break;
+    }
+    case BALL_MODE.STOP:
+    case BALL_MODE.RIGID:
+    case BALL_MODE.FIELD:
+      break;
+    default:
+      throw new Error(`Frontier Destiny mode ${mode} is not encoded yet`);
+  }
+}
+
+function encodeFrontierRigidBall(entity) {
+  const chunks = [];
+  const position = buildVector(entity && entity.position);
+  const mode = getStaticBallMode(entity);
+  pushBigInt64(
+    chunks,
+    requireEntityID(entity && entity.itemID, "Destiny ball itemID"),
+  );
+  pushUInt8(chunks, mode);
+  pushFloat(chunks, getEntityBallRadius(entity));
+  pushDouble(chunks, position.x);
+  pushDouble(chunks, position.y);
+  pushDouble(chunks, position.z);
+  pushUInt8(chunks, getRigidBallFlags(entity));
+  appendFrontierCommonBallTail(chunks, entity);
+  pushInt32(chunks, toInt32(entity && entity.convexCollisionID, 0));
+  pushUInt8(chunks, 0xff);
+  appendFrontierModeData(chunks, entity, mode);
+  return Buffer.concat(chunks);
+}
+
+function encodeFrontierFreeBall(entity, options = {}) {
+  const encodedEntity = buildAddBallsBootstrapEntity(entity, options);
+  const chunks = [];
+  const position = buildVector(encodedEntity && encodedEntity.position);
+  const velocity = buildVector(encodedEntity && encodedEntity.velocity);
+  const angularVelocity = buildVector(
+    encodedEntity && encodedEntity.angularVelocity,
+  );
+  const mode = getFreeBallMode(encodedEntity);
+  pushBigInt64(
+    chunks,
+    requireEntityID(encodedEntity && encodedEntity.itemID, "Destiny ball itemID"),
+  );
+  pushUInt8(chunks, mode);
+  pushFloat(chunks, getEntityBallRadius(encodedEntity));
+  pushDouble(chunks, position.x);
+  pushDouble(chunks, position.y);
+  pushDouble(chunks, position.z);
+  pushUInt8(chunks, getFreeBallFlags(encodedEntity));
+  appendFrontierCommonBallTail(chunks, encodedEntity);
+
+  const fallbackMass = (
+    encodedEntity.kind === "container" || encodedEntity.kind === "wreck"
+  ) ? 10_000 : 1_000_000;
+  pushDouble(
+    chunks,
+    resolveDestinyPhysicalMass(encodedEntity, fallbackMass),
+  );
+  pushUInt8(chunks, getEntityCloakMode(encodedEntity));
+  appendFreeBallOwnershipHeader(chunks, encodedEntity);
+  pushFloat(chunks, toFiniteNumber(encodedEntity.maxVelocity, 0));
+  pushDouble(chunks, velocity.x);
+  pushDouble(chunks, velocity.y);
+  pushDouble(chunks, velocity.z);
+  pushFloat(chunks, toFiniteNumber(encodedEntity.inertia, 1));
+  pushFloat(chunks, toFiniteNumber(encodedEntity.speedFraction, 0));
+  pushDouble(chunks, angularVelocity.x);
+  pushDouble(chunks, angularVelocity.y);
+  pushDouble(chunks, angularVelocity.z);
+  appendFrontierFreeBallConfiguration(chunks, encodedEntity);
+  pushUInt8(chunks, 0xff);
+  appendFrontierModeData(chunks, encodedEntity, mode);
+  return Buffer.concat(chunks);
+}
+
 function encodeFreeBall(entity, options = {}) {
   const encodedEntity = buildAddBallsBootstrapEntity(entity, options);
   const chunks = [];
@@ -557,6 +702,11 @@ function encodeFreeBall(entity, options = {}) {
 }
 
 function encodeEntityBall(entity, options = {}) {
+  if (usesFrontierBallEncoding(options)) {
+    return isFreeBallEntity(entity)
+      ? encodeFrontierFreeBall(entity, options)
+      : encodeFrontierRigidBall(entity);
+  }
   return isFreeBallEntity(entity)
     ? encodeFreeBall(entity, options)
     : encodeRigidBall(entity);
@@ -711,6 +861,8 @@ module.exports = {
   describeBallFlags,
   describeBallMode,
   encodeEntityBall,
+  encodeFrontierFreeBall,
+  encodeFrontierRigidBall,
   encodeFreeBall,
   encodeRigidBall,
   getDestinyEffectStamp,
@@ -736,4 +888,5 @@ module.exports = {
   isFreeBallInteractive,
   isTargetedLiveMissile,
   shouldUseSessionlessNpcWarpAddBallsBootstrap,
+  usesFrontierBallEncoding,
 };

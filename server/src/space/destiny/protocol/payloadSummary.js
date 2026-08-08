@@ -214,7 +214,18 @@ function createDestinyPayloadSummary(deps = {}) {
   }
 
   function extractSlimItemIdentity(slimEntry) {
-    const slimItem = Array.isArray(slimEntry) ? slimEntry[0] : slimEntry;
+    let slimItem = Array.isArray(slimEntry) ? slimEntry[0] : slimEntry;
+    let fallbackItemID;
+    if (
+      Array.isArray(slimEntry) &&
+      slimEntry.length >= 2 &&
+      normalizeSummaryEntityID(slimEntry[0]) !== null &&
+      slimEntry[1] &&
+      typeof slimEntry[1] === "object"
+    ) {
+      fallbackItemID = slimEntry[0];
+      slimItem = slimEntry[1];
+    }
     let rawItemID;
     let rawTypeID;
     try {
@@ -225,6 +236,9 @@ function createDestinyPayloadSummary(deps = {}) {
       )
         ? slimItem.itemID
         : getMarshalDictEntry(slimItem, "itemID");
+      if (rawItemID === undefined) {
+        rawItemID = fallbackItemID;
+      }
       rawTypeID = (
         slimItem &&
         typeof slimItem === "object" &&
@@ -323,7 +337,9 @@ function createDestinyPayloadSummary(deps = {}) {
           roundNumber(unwrapMarshalNumber(args[2], 0)),
           roundNumber(unwrapMarshalNumber(args[3], 0)),
         ];
+      case "SetPitch":
       case "SetSpeedFraction":
+      case "SetYawRate":
         if (getPrimaryEntityID(payload) === null) {
           return null;
         }

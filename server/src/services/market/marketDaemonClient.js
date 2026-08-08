@@ -14,6 +14,9 @@ function normalizePositiveInteger(value, fallback) {
 
 class MarketDaemonClient {
   constructor(options = {}) {
+    this.enabled = Object.prototype.hasOwnProperty.call(options, "enabled")
+      ? options.enabled === true
+      : config.marketDaemonEnabled !== false;
     this.host = String(options.host || config.marketDaemonHost || "127.0.0.1");
     this.port = normalizePositiveInteger(
       options.port || config.marketDaemonPort,
@@ -45,6 +48,7 @@ class MarketDaemonClient {
 
   getStatus() {
     return {
+      enabled: this.enabled,
       host: this.host,
       port: this.port,
       connected: this._connected && this._isSocketUsable(),
@@ -54,6 +58,9 @@ class MarketDaemonClient {
   }
 
   startBackgroundConnect() {
+    if (!this.enabled) {
+      return;
+    }
     this._backgroundReconnectEnabled = true;
     this._scheduleReconnect(0);
   }
@@ -64,11 +71,17 @@ class MarketDaemonClient {
   }
 
   async call(method, params = {}, options = {}) {
+    if (!this.enabled) {
+      throw new Error("market daemon RPC is disabled");
+    }
     await this.ensureConnected(options);
     return this._sendRequest(method, params);
   }
 
   async ensureConnected(options = {}) {
+    if (!this.enabled) {
+      throw new Error("market daemon RPC is disabled");
+    }
     if (this._isSocketUsable()) {
       return;
     }

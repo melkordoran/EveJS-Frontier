@@ -328,6 +328,7 @@ const INTEGRATED_STRUCTURE_SERVICE_MODULE_TYPE_IDS = new Set([
 ]);
 const CHARGE_CATEGORY_ID = 8;
 const IMPLANT_CATEGORY_ID = 20;
+const SHELL_CATEGORY_ID = 2153;
 const SHIP_CATEGORY_ID = 6;
 const STRUCTURE_CATEGORY_ID = 65;
 const FLAG_MOON_MATERIAL_BAY = 186;
@@ -5525,18 +5526,36 @@ class InvBrokerService extends BaseService {
   }
 
   _getCharacterContainerItems(session, requestedFlag = null) {
+    const characterID = this._getCharacterId(session);
     const numericFlag =
       requestedFlag === null || requestedFlag === undefined
         ? null
         : this._normalizeInventoryId(requestedFlag, 0);
 
-    return getCharacterSkills(this._getCharacterId(session)).filter((skill) => {
+    const skills = getCharacterSkills(characterID).filter((skill) => {
       if (numericFlag === null || numericFlag === 0) {
         return true;
       }
 
       return this._normalizeInventoryId(skill.flagID, 0) === numericFlag;
     });
+    const shells = listContainerItems(
+      characterID,
+      characterID,
+      numericFlag === null || numericFlag === 0 ? null : numericFlag,
+    ).filter(
+      (item) =>
+        this._normalizeInventoryId(item && item.categoryID, 0) ===
+        SHELL_CATEGORY_ID,
+    );
+    const itemsByID = new Map();
+    for (const item of [...skills, ...shells]) {
+      const itemID = this._normalizeInventoryId(item && item.itemID, 0);
+      if (itemID > 0) {
+        itemsByID.set(itemID, item);
+      }
+    }
+    return Array.from(itemsByID.values());
   }
 
   _listCorporationOfficeItems(session, office, requestedFlag = null) {
@@ -5864,11 +5883,19 @@ class InvBrokerService extends BaseService {
       return nativeNpcStore.buildNativeWreckContents(containerID);
     }
 
-    return listContainerItems(
+    const containerItems = listContainerItems(
       this._getCharacterId(session),
       containerID,
       numericFlag,
     );
+    const shipItem = findShipItemById(containerID);
+    if (!shipItem) {
+      return containerItems;
+    }
+    const {
+      filterCreationModuleInventoryItems,
+    } = require(path.join(__dirname, "../frontier/creationRuntime"));
+    return filterCreationModuleInventoryItems(shipItem, containerItems);
   }
 
   _buildCapacityInfo(capacity, used) {

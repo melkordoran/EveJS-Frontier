@@ -116,6 +116,14 @@ function prepareHandoffInputs(options = {}) {
   };
 }
 
+// A null slim item means the active compatibility profile does not accept
+// wire SlimItem objects (Frontier builds them from CR data and whitelists no
+// SlimItem class). Emitting the action anyway would make the client reject
+// the whole handoff bundle, so drop just this payload.
+function slimItemChangePayloads(entityID, slimItem) {
+  return slimItem ? [buildOnSlimItemChangePayload(entityID, slimItem)] : [];
+}
+
 function buildPlan(stamp, payloads, options = {}) {
   const includesFollowingRemoval =
     options.followingRemovalEntityID !== undefined;
@@ -237,16 +245,16 @@ function buildSameSceneShipBoardingHandoffPlan(options = {}) {
   return buildPlan(stamp, [
     buildSetBallInteractivePayload(previousID, false),
     buildStopPayload(previousID),
-    buildOnSlimItemChangePayload(previousID, previousSlim),
+    ...slimItemChangePayloads(previousID, previousSlim),
     buildSetMaxSpeedPayload(previousID, getEntityMaxSpeed(previousEntity)),
     buildSetBallAgilityPayload(previousID, getEntityAgility(previousEntity)),
     buildSetBallInteractivePayload(boardedID, true),
-    buildOnSlimItemChangePayload(boardedID, boardedSlim),
+    ...slimItemChangePayloads(boardedID, boardedSlim),
     buildSetMaxSpeedPayload(boardedID, getEntityMaxSpeed(boardedEntity)),
     buildSetBallAgilityPayload(boardedID, getEntityAgility(boardedEntity)),
     // TQ repeats the new ego slim after its physical setters so ownership-
     // dependent menus and the HUD refresh against the final piloted envelope.
-    buildOnSlimItemChangePayload(boardedID, boardedSlim),
+    ...slimItemChangePayloads(boardedID, boardedSlim),
   ], {
     boardedEntityID: boardedID,
     followingRemovalEntityID:
@@ -294,7 +302,7 @@ function buildSameSceneShipEjectHandoffPlan(options = {}) {
     buildSetBallPositionPayload(capsuleID, capsulePosition),
     buildSetBallInteractivePayload(abandonedShipID, false),
     buildStopPayload(abandonedShipID),
-    buildOnSlimItemChangePayload(abandonedShipID, abandonedShipSlim),
+    ...slimItemChangePayloads(abandonedShipID, abandonedShipSlim),
     buildSetBallAgilityPayload(
       abandonedShipID,
       getEntityAgility(abandonedShipEntity),
@@ -304,10 +312,10 @@ function buildSameSceneShipEjectHandoffPlan(options = {}) {
       getEntityMaxSpeed(abandonedShipEntity),
     ),
     buildSetBallInteractivePayload(capsuleID, true),
-    buildOnSlimItemChangePayload(capsuleID, capsuleSlim),
+    ...slimItemChangePayloads(capsuleID, capsuleSlim),
     buildSetBallAgilityPayload(capsuleID, getEntityAgility(capsuleEntity)),
     buildSetMaxSpeedPayload(capsuleID, getEntityMaxSpeed(capsuleEntity)),
-    buildOnSlimItemChangePayload(capsuleID, capsuleSlim),
+    ...slimItemChangePayloads(capsuleID, capsuleSlim),
   ]);
 }
 

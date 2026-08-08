@@ -7,6 +7,10 @@ const {
 const CHARACTER_SKILL_ENTRY_CLASS =
   "characterskills.common.character_skill_entry.CharacterSkillEntry";
 
+function isFrontierProfile(compatibilityProfile) {
+  return String(compatibilityProfile || "").trim().toLowerCase() === "frontier";
+}
+
 function toInt(value, fallback = 0) {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? Math.trunc(numeric) : fallback;
@@ -56,15 +60,19 @@ function buildCharacterSkillEntry(skillRecord, options = {}) {
     );
   }
 
+  const constructorArgs = [
+    typeID,
+    trainedSkillLevel,
+    trainedSkillPoints,
+    skillRank,
+  ];
+  if (!isFrontierProfile(options.compatibilityProfile)) {
+    constructorArgs.push(virtualSkillLevel);
+  }
+
   return buildObjectEx1(
     CHARACTER_SKILL_ENTRY_CLASS,
-    [
-      typeID,
-      trainedSkillLevel,
-      trainedSkillPoints,
-      skillRank,
-      virtualSkillLevel,
-    ],
+    constructorArgs,
     stateEntries,
   );
 }
@@ -94,4 +102,5 @@ module.exports = {
   CHARACTER_SKILL_ENTRY_CLASS,
   buildCharacterSkillDict,
   buildCharacterSkillEntry,
+  isFrontierProfile,
 };

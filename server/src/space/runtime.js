@@ -48,6 +48,10 @@ const AIR_CIVILIAN_ASTERO_TYPE_ID = 58745;
 const config = require(path.join(__dirname, "../config"));
 const log = require(path.join(__dirname, "../utils/logger"));
 const {
+  isFrontierProfile: isFrontierStartupProfile,
+  resolveDefaultStartupSystemIDs,
+} = require(path.join(__dirname, "./startupPreloadCompatibility"));
+const {
   updateShipItem,
   updateInventoryItem,
   removeInventoryItem,
@@ -560,6 +564,9 @@ const {
   createMovementStopSpeedCommands,
 } = require(path.join(__dirname, "./destiny/commands/stopSpeedCommands.js"));
 const {
+  createMovementManualFlightCommands,
+} = require(path.join(__dirname, "./destiny/commands/manualFlightCommands.js"));
+const {
   applyPendingDockStateCommand,
 } = require(path.join(__dirname, "./destiny/commands/docking.js"));
 const {
@@ -966,8 +973,7 @@ const NEW_EDEN_SYSTEM_LOADING = Object.freeze({
   ONGOING_LAZY: 4,
 });
 // Modes 1 and 4 intentionally preserve the current startup preload so a fresh
-// boot still only materializes the known Jita <-> New Caldari <-> Manifest
-// path up front.
+// boot materializes only the compatibility profile's bootstrap systems.
 // Mode 4 then keeps every stargate active so additional systems load only when
 // players actually jump into them.
 const STARTUP_PRELOADED_SYSTEM_IDS = Object.freeze([30000142, 30000145, 30100032]);
@@ -1184,6 +1190,13 @@ const WARP_START_ACTIVATION_SEED_SCALE = 1.1;
 // bumped warpFactor, but the client still stayed on the same wrapper-only path.
 const ENABLE_PILOT_WARP_FACTOR_OPTION_A = false;
 const PILOT_WARP_FACTOR_OPTION_A_SCALE = 1.15;
+// Frontier exposes per-ball warp coefficients. Set the legacy Destiny profile
+// before WarpTo so the native solver remains in flight while Warp FX prepares.
+const INDIVIDUAL_WARP_FACTORS = isFrontierStartupProfile(
+  config.clientCompatibilityProfile,
+)
+  ? Object.freeze({ acceleration: 0.001, deceleration: 1 / 3000 })
+  : null;
 // Option B: keep the live branch honest and isolated by sending one late
 // pilot-only SetMaxSpeed assist at the predicted start of exit / deceleration.
 const ENABLE_PILOT_WARP_SOLVER_ASSIST_OPTION_B = false;
@@ -1917,11 +1930,22 @@ function getMarshalDictEntry(value, key) {
 }
 
 function extractSlimItemIdentity(slimEntry) {
-  const slimItem = Array.isArray(slimEntry) ? slimEntry[0] : slimEntry;
+  let slimItem = Array.isArray(slimEntry) ? slimEntry[0] : slimEntry;
+  let fallbackItemID = 0;
+  if (
+    Array.isArray(slimEntry) &&
+    slimEntry.length >= 2 &&
+    ["bigint", "number", "string"].includes(typeof slimEntry[0]) &&
+    slimEntry[1] &&
+    typeof slimEntry[1] === "object"
+  ) {
+    fallbackItemID = slimEntry[0];
+    slimItem = slimEntry[1];
+  }
   const itemID = toInt(
     slimItem && typeof slimItem === "object" && "itemID" in slimItem
       ? slimItem.itemID
-      : getMarshalDictEntry(slimItem, "itemID"),
+      : (getMarshalDictEntry(slimItem, "itemID") ?? fallbackItemID),
     0,
   );
   const typeID = toInt(
@@ -3143,18 +3167,30 @@ function formatStartupBootstrapMetrics(metrics = {}) {
 
 function resolveStartupSolarSystemPreloadPlan() {
   const mode = getConfiguredStartupSystemLoadingMode();
+  const defaultSystemIDs = resolveDefaultStartupSystemIDs(
+    config.clientCompatibilityProfile,
+  );
+  const frontierProfile = isFrontierStartupProfile(
+    config.clientCompatibilityProfile,
+  );
+  const defaultTargetSummary = frontierProfile
+    ? "Frontier bootstrap system"
+    : "Jita, New Caldari, and Manifest";
+  const defaultLabel = frontierProfile
+    ? "preloading only the Frontier bootstrap system"
+    : "preloading only the default startup systems (Jita, New Caldari, and Manifest)";
 
   if (mode === NEW_EDEN_SYSTEM_LOADING.ONGOING_LAZY) {
     return {
       mode,
       modeName: "OnGoingLazy",
       label:
-        "preloading only the default startup systems (Jita, New Caldari, and Manifest) while keeping every stargate active for on-demand loading",
+        `${defaultLabel} while keeping every stargate active for on-demand loading`,
       selectionRule:
         "Preserves the lazy preload list, but all stargates remain active and destination scenes load only when jumped into",
       targetSummary:
-        "Jita, New Caldari, and Manifest preload with on-demand access to the rest of New Eden",
-      systemIDs: [...STARTUP_PRELOADED_SYSTEM_IDS],
+        `${defaultTargetSummary} with on-demand access to the remaining systems`,
+      systemIDs: defaultSystemIDs,
     };
   }
 
@@ -3192,10 +3228,10 @@ function resolveStartupSolarSystemPreloadPlan() {
   return {
     mode: NEW_EDEN_SYSTEM_LOADING.LAZY,
     modeName: "Lazy Default",
-    label: "preloading only the default startup systems (Jita, New Caldari, and Manifest)",
+    label: defaultLabel,
     selectionRule: "Preserves the current startup behavior",
-    targetSummary: "Jita, New Caldari, and Manifest",
-    systemIDs: [...STARTUP_PRELOADED_SYSTEM_IDS],
+    targetSummary: defaultTargetSummary,
+    systemIDs: defaultSystemIDs,
   };
 }
 
@@ -3482,6 +3518,55 @@ function getEntityRuntimeShipItem(entity) {
   return buildRuntimeShipItemFromEntity(entity);
 }
 
+function resolveFrontierCreationDogmaContext(shipItem, characterID = 0) {
+  const itemID = toInt(shipItem && shipItem.itemID, 0);
+  const typeID = toInt(shipItem && shipItem.typeID, 0);
+  const persistedShipItem = itemID > 0 ? findShipItemById(itemID) : null;
+  const inventoryCharacterID = toInt(
+    characterID,
+    toInt(persistedShipItem && persistedShipItem.ownerID, 0),
+  );
+  if (
+    !persistedShipItem ||
+    typeID <= 0 ||
+    toInt(persistedShipItem.typeID, 0) !== typeID ||
+    inventoryCharacterID <= 0 ||
+    toInt(persistedShipItem.ownerID, 0) !== inventoryCharacterID
+  ) {
+    return null;
+  }
+
+  const creationRuntime = lazyRequire("../services/frontier/creationRuntime");
+  if (
+    !creationRuntime ||
+    typeof creationRuntime.getCreationDogmaContext !== "function"
+  ) {
+    return null;
+  }
+  const result = creationRuntime.getCreationDogmaContext(
+    persistedShipItem,
+    inventoryCharacterID,
+  );
+  return result && result.success && result.data ? result.data : null;
+}
+
+function getEntityRuntimeCreationDogmaContext(entity, shipItem = null) {
+  if (!entity || entity.kind !== "ship" || isNativeNpcEntity(entity)) {
+    return null;
+  }
+  return resolveFrontierCreationDogmaContext(
+    shipItem || getEntityRuntimeShipItem(entity),
+    getShipEntityInventoryCharacterID(entity, 0),
+  );
+}
+
+function getCreationDogmaShipAttributeModifierEntries(creationDogmaContext) {
+  return creationDogmaContext &&
+    Array.isArray(creationDogmaContext.shipAttributeModifierEntries)
+    ? creationDogmaContext.shipAttributeModifierEntries
+    : [];
+}
+
 function getEntityRuntimeFittedItems(entity) {
   if (!isRuntimeDogmaHostEntity(entity)) {
     return [];
@@ -3511,9 +3596,18 @@ function getEntityRuntimeFittedItems(entity) {
     : [];
 }
 
-function getEntityRuntimeModuleOwnerItems(entity) {
+function getEntityRuntimeModuleOwnerItems(entity, options = {}) {
+  const creationDogmaContext = Object.prototype.hasOwnProperty.call(
+    options,
+    "creationDogmaContext",
+  )
+    ? options.creationDogmaContext
+    : getEntityRuntimeCreationDogmaContext(entity);
   const candidateItems = [
     ...getEntityRuntimeFittedItems(entity),
+    ...(creationDogmaContext && Array.isArray(creationDogmaContext.moduleItems)
+      ? creationDogmaContext.moduleItems
+      : []),
     ...(isNativeNpcEntity(entity)
       ? [
         ...getNpcWeaponModules(entity),
@@ -6340,6 +6434,8 @@ function refreshInventoryBackedEntityPresentationFields(entity) {
     interdictionProbeRuntime.hydrateInterdictionProbeEntityFromInventoryItem(entity, itemRecord);
   }
   if (entity.kind === "deployable") {
+    lazyRequire("../services/frontier/deploymentRuntime")
+      .hydrateConstructionEntityFromInventoryItem(entity, itemRecord);
     deployableCynoRuntime.hydrateMobileCynoDeployableEntityFromInventoryItem(entity, itemRecord);
     mobileDepotRuntime.hydrateMobileDepotEntityFromInventoryItem(entity, itemRecord);
     mobileAnalysisBeaconRuntime.hydrateMobileAnalysisBeaconEntityFromInventoryItem(entity, itemRecord);
@@ -8792,6 +8888,71 @@ function buildStaticAsteroidBeltEntity(asteroidBelt) {
     radius: asteroidBelt.radius || 15_000,
     position: cloneVector(asteroidBelt.position),
     velocity: { x: 0, y: 0, z: 0 },
+  };
+}
+
+function autoMaterializeNearbyLandscapeSiteForAttach(scene, anchorEntity, options = {}) {
+  if (!scene || !anchorEntity) {
+    return null;
+  }
+  try {
+    const landscapeSceneService = lazyRequire("./frontierLandscapeSceneService");
+    if (!landscapeSceneService) {
+      return null;
+    }
+    const materialize =
+      typeof landscapeSceneService.materializeNearbyLandscapeSites === "function"
+        ? landscapeSceneService.materializeNearbyLandscapeSites
+        : landscapeSceneService.materializeNearbyLandscapeSite;
+    if (typeof materialize !== "function") {
+      return null;
+    }
+    return materialize(
+      scene,
+      anchorEntity,
+      options,
+    );
+  } catch (error) {
+    log.warn(
+      `[SpaceRuntime] attach-session landscape materialize failed for system=${toInt(scene && scene.systemID, 0)}: ${error.message}`,
+    );
+    return null;
+  }
+}
+
+function buildStaticLandscapeSiteEntity(site) {
+  const radius = Math.max(1, toFiniteNumber(site && site.radius, 1));
+  const systemID = toInt(site && site.solarSystemID, 0);
+  return {
+    kind: "landscapeSite",
+    nonPhysicalDecloakExempt: true,
+    itemID: toInt(site && site.itemID, 0),
+    typeID: toInt(site && site.typeID, 0),
+    groupID: toInt(site && site.groupID, 0),
+    categoryID: toInt(site && site.categoryID, 0),
+    graphicID: toInt(site && site.graphicID, 0) || null,
+    itemName: String(site && site.itemName || "Landscape Site"),
+    ownerID: 1,
+    radius,
+    signatureRadius: radius,
+    position: cloneVector(site && site.position),
+    velocity: { x: 0, y: 0, z: 0 },
+    locationID: systemID,
+    systemID,
+    featureID: toInt(site && site.featureID, 0),
+    featureKind: String(site && site.featureKind || ""),
+    featureTags: Array.isArray(site && site.featureTags)
+      ? [...site.featureTags]
+      : [],
+    ecosystemID: toInt(site && site.ecosystemID, 0),
+    ecosystemName: String(site && site.ecosystemName || ""),
+    dungeonID: toInt(site && site.dungeonID, 0),
+    dungeonNameID: toInt(site && site.dungeonNameID, 0) || null,
+    archetypeID: toInt(site && site.archetypeID, 0) || null,
+    dungeonEntryObjectID:
+      toInt(site && site.dungeonEntryObjectID, 0) || null,
+    customLandscapeSite: site && site.customLandscapeSite === true,
+    staticVisibilityScope: String(site && site.staticVisibilityScope || "") || undefined,
   };
 }
 
@@ -18109,6 +18270,25 @@ function notifyTargetingDerivedAttributesToSession(
   return notifyAttributeChanges(session, attributeChanges);
 }
 
+function resolveShipAngularAttribute(
+  passiveResourceState,
+  typeID,
+  attributeName,
+  fallback,
+) {
+  const attributeID = getAttributeIDByNames(attributeName);
+  const passiveValue = attributeID > 0
+    ? passiveResourceState && passiveResourceState.attributes &&
+      passiveResourceState.attributes[String(attributeID)]
+    : undefined;
+  const resolvedPassiveValue = Number(passiveValue);
+  if (Number.isFinite(resolvedPassiveValue) && resolvedPassiveValue > 0) {
+    return resolvedPassiveValue;
+  }
+  const typeValue = Number(getTypeAttributeValue(typeID, attributeName));
+  return Number.isFinite(typeValue) && typeValue > 0 ? typeValue : fallback;
+}
+
 function buildShipEntityCore(source, systemID, options = {}) {
   const movement =
     worldData.getMovementAttributesForType(source.typeID) || null;
@@ -18168,6 +18348,18 @@ function buildShipEntityCore(source, systemID, options = {}) {
     toFiniteNumber(movement && movement.maxAccelerationTime, 0) > 0
       ? toFiniteNumber(movement.maxAccelerationTime, 0)
       : 6;
+  const maxAngularSpeed = resolveShipAngularAttribute(
+    passiveResourceState,
+    source.typeID,
+    "maxAngularSpeed",
+    0.25,
+  );
+  const angularAgility = resolveShipAngularAttribute(
+    passiveResourceState,
+    source.typeID,
+    "angularAgility",
+    1,
+  );
   const speedFraction = clamp(
     toFiniteNumber(spaceState.speedFraction, magnitude(velocity) > 0 ? 1 : 0),
     0,
@@ -18249,6 +18441,9 @@ function buildShipEntityCore(source, systemID, options = {}) {
           ? toFiniteNumber(movement.radius, 0)
         : 50,
     maxVelocity,
+    maxAngularSpeed,
+    angularAgility,
+    angularVelocity: { x: 0, y: 0, z: 0 },
     alignTime,
     maxAccelerationTime,
     agilitySeconds: deriveAgilitySeconds(
@@ -18374,14 +18569,20 @@ function buildShipEntityCore(source, systemID, options = {}) {
 
 function buildShipEntity(session, shipItem, systemID) {
   const characterData = resolveCharacterRecord(session && session.characterID) || {};
+  const creationDogmaContext = resolveFrontierCreationDogmaContext(
+    shipItem,
+    session && session.characterID,
+  );
   const passiveResourceState = buildPassiveShipResourceState(
     session && session.characterID,
     shipItem,
     {
-      additionalAttributeModifierEntries:
-        wormholeEnvironmentRuntime.collectShipAttributeModifierEntriesForSystem(
+      additionalAttributeModifierEntries: [
+        ...getCreationDogmaShipAttributeModifierEntries(creationDogmaContext),
+        ...(wormholeEnvironmentRuntime.collectShipAttributeModifierEntriesForSystem(
           systemID,
-        ),
+        ) || []),
+      ],
     },
   );
   const initialModules = resolveShipSlimModules({
@@ -18420,6 +18621,10 @@ function buildShipEntity(session, shipItem, systemID) {
 
 function buildRuntimeShipEntity(shipSpec, systemID, options = {}) {
   const source = shipSpec || {};
+  const creationDogmaContext = resolveFrontierCreationDogmaContext(
+    source,
+    source.pilotCharacterID ?? source.characterID,
+  );
   const passiveResourceState =
     source.passiveResourceState ||
     buildPassiveShipResourceState(
@@ -18435,10 +18640,12 @@ function buildRuntimeShipEntity(shipSpec, systemID, options = {}) {
       {
         fittedItems: Array.isArray(source.fittedItems) ? source.fittedItems : [],
         skillMap: source.skillMap instanceof Map ? source.skillMap : undefined,
-        additionalAttributeModifierEntries:
-          wormholeEnvironmentRuntime.collectShipAttributeModifierEntriesForSystem(
+        additionalAttributeModifierEntries: [
+          ...getCreationDogmaShipAttributeModifierEntries(creationDogmaContext),
+          ...(wormholeEnvironmentRuntime.collectShipAttributeModifierEntriesForSystem(
             systemID,
-          ),
+          ) || []),
+        ],
       },
     );
 
@@ -19093,6 +19300,8 @@ function buildRuntimeInventoryEntity(item, systemID, nowMs) {
     interdictionProbeRuntime.hydrateInterdictionProbeEntityFromInventoryItem(entity, item);
   }
   if (kind === "deployable") {
+    lazyRequire("../services/frontier/deploymentRuntime")
+      .hydrateConstructionEntityFromInventoryItem(entity, item);
     deployableCynoRuntime.hydrateMobileCynoDeployableEntityFromInventoryItem(entity, item);
     mobileDepotRuntime.hydrateMobileDepotEntityFromInventoryItem(entity, item);
     mobileAnalysisBeaconRuntime.hydrateMobileAnalysisBeaconEntityFromInventoryItem(entity, item);
@@ -19418,6 +19627,7 @@ const movementWarpBuilders = createDestinyWarpUpdateBuilders({
   ENABLE_PILOT_WARP_FACTOR_OPTION_A,
   ENABLE_PILOT_WARP_MAX_SPEED_RAMP,
   ENABLE_PILOT_WARP_SOLVER_ASSIST_OPTION_B,
+  INDIVIDUAL_WARP_FACTORS,
   MAX_SUBWARP_SPEED_FRACTION,
   PILOT_WARP_FACTOR_OPTION_A_SCALE,
   PILOT_WARP_SOLVER_ASSIST_LEAD_MS,
@@ -19430,7 +19640,6 @@ const movementWarpBuilders = createDestinyWarpUpdateBuilders({
 });
 
 const {
-  buildPilotWarpActivationStateRefreshUpdates,
   getNominalWarpFactor,
   getPilotWarpFactorOptionA,
   buildWarpPrepareCommandUpdate,
@@ -20039,7 +20248,6 @@ const dispatchGotoPointEntity = movementSubwarpCommands.gotoPointEntity;
 const movementWarpCommands = createMovementWarpCommands({
   activatePendingWarp,
   armMovementTrace,
-  buildPilotWarpActivationUpdates,
   buildDirectedMovementUpdates,
   buildOfficialWarpReferenceProfile,
   buildPendingWarpRequest,
@@ -20125,6 +20333,26 @@ const {
   stopShipEntity: dispatchStopShipEntity,
   stop: dispatchStop,
 } = movementStopSpeedCommands;
+
+const movementManualFlightCommands = createMovementManualFlightCommands({
+  addVectors,
+  armMovementTrace,
+  clamp,
+  clearTrackingState,
+  cloneVector,
+  normalizeVector,
+  persistShipEntity,
+  roundNumber,
+  scaleVector,
+  summarizeVector,
+  toFiniteNumber,
+  DEFAULT_RIGHT,
+});
+
+const {
+  setPitch: dispatchSetPitch,
+  setYawRate: dispatchSetYawRate,
+} = movementManualFlightCommands;
 
 function pushMinHeapEntry(heap, entry, compareEntries) {
   if (!Array.isArray(heap) || !entry || typeof compareEntries !== "function") {
@@ -20238,6 +20466,21 @@ class SolarSystemScene {
     for (const asteroidBelt of worldData.getAsteroidBeltsForSystem(this.systemID)) {
       const entity = buildStaticAsteroidBeltEntity(asteroidBelt);
       this.addStaticEntity(entity);
+    }
+    for (const site of worldData.getLandscapeSitesForSystem(this.systemID)) {
+      const entity = buildStaticLandscapeSiteEntity(site);
+      this.addStaticEntity(entity);
+    }
+    try {
+      const customLandscapeSites = lazyRequire("./frontierLandscapeCustomSites");
+      for (const site of customLandscapeSites.listSites(this.systemID)) {
+        const entity = buildStaticLandscapeSiteEntity(site);
+        this.addStaticEntity(entity);
+      }
+    } catch (error) {
+      log.warn(
+        `[SpaceRuntime] Failed to load custom landscape sites for system=${this.systemID}: ${error.message}`,
+      );
     }
     for (const celestial of worldData.getCelestialsForSystem(this.systemID)) {
       const entity = buildStaticCelestialEntity(celestial);
@@ -26245,8 +26488,12 @@ class SolarSystemScene {
     hostileModuleRuntime.recomputeTargetAggregateState(entity);
     const fittedItems = getEntityRuntimeFittedItems(entity);
     const session = options.session || entity.session || null;
+    const creationDogmaContext = getEntityRuntimeCreationDogmaContext(
+      entity,
+      shipRecord,
+    );
     const validModuleOwnerIDs = new Set(
-      getEntityRuntimeModuleOwnerItems(entity)
+      getEntityRuntimeModuleOwnerItems(entity, { creationDogmaContext })
         .map((item) => toInt(item && item.itemID, 0))
         .filter((itemID) => itemID > 0),
     );
@@ -26320,11 +26567,13 @@ class SolarSystemScene {
       {
         fittedItems,
         skillMap,
-        additionalAttributeModifierEntries:
-          collectEntityActiveShipAttributeModifierEntries(
+        additionalAttributeModifierEntries: [
+          ...getCreationDogmaShipAttributeModifierEntries(creationDogmaContext),
+          ...(collectEntityActiveShipAttributeModifierEntries(
             entity,
             this.getCurrentSimTimeMs(),
-          ),
+          ) || []),
+        ],
       },
     );
     applyPassiveResourceStateToEntity(entity, passiveResourceState, {
@@ -36125,6 +36374,11 @@ class SolarSystemScene {
           session,
           nowMs: rawCurrentSimTimeMs,
         });
+        autoMaterializeNearbyLandscapeSiteForAttach(this, egoEntity, {
+          broadcast: false,
+          session,
+          nowMs: rawCurrentSimTimeMs,
+        });
         if (session._space !== initialBallparkGeneration) {
           throw new Error("DESTINY_BOOTSTRAP_POST_MATERIALIZE_GENERATION_REPLACED");
         }
@@ -37757,6 +38011,50 @@ class SolarSystemScene {
     }
     this.cancelStargateJumpCloakBeforePilotCommand(session, "movement");
     const result = dispatchGotoDirection(this, session, direction, options);
+    this.cancelStargateJumpCloakAfterCommand(session, result, "movement");
+    if (result) {
+      this.retireInactiveFleetWarpCommandAssociation(entity);
+      this.processSessionShipCloakProximityDecloak(session);
+      this.flushDirectDestinyNotificationBatchIfIdle();
+    }
+    return result;
+  }
+
+  setPitch(session, pitch) {
+    const entity = this.getShipEntityForSession(session);
+    if (
+      !entity ||
+      entity.mode === "WARP" ||
+      entity.pendingDock ||
+      hasPendingPilotWarpLanding(session, entity) ||
+      isShipMovementLockedByRuntime(entity, this.getCurrentSimTimeMs())
+    ) {
+      return false;
+    }
+    this.cancelStargateJumpCloakBeforePilotCommand(session, "movement");
+    const result = dispatchSetPitch(this, session, pitch);
+    this.cancelStargateJumpCloakAfterCommand(session, result, "movement");
+    if (result) {
+      this.retireInactiveFleetWarpCommandAssociation(entity);
+      this.processSessionShipCloakProximityDecloak(session);
+      this.flushDirectDestinyNotificationBatchIfIdle();
+    }
+    return result;
+  }
+
+  setYawRate(session, yawRate) {
+    const entity = this.getShipEntityForSession(session);
+    if (
+      !entity ||
+      entity.mode === "WARP" ||
+      entity.pendingDock ||
+      hasPendingPilotWarpLanding(session, entity) ||
+      isShipMovementLockedByRuntime(entity, this.getCurrentSimTimeMs())
+    ) {
+      return false;
+    }
+    this.cancelStargateJumpCloakBeforePilotCommand(session, "movement");
+    const result = dispatchSetYawRate(this, session, yawRate);
     this.cancelStargateJumpCloakAfterCommand(session, result, "movement");
     if (result) {
       this.retireInactiveFleetWarpCommandAssociation(entity);
@@ -39577,6 +39875,52 @@ class SolarSystemScene {
             });
             continue;
           }
+          // Deferred pilot WarpTo prepare: the align phase ran physically
+          // (advanceGotoMovement turned the entity; the pilot only received a
+          // GotoDirection so far). Author the native prepare bundle now on
+          // fresh history-safe stamps so the client DLL enters WarpState=1
+          // already aligned and transitions to the tunnel on its own.
+          const pilotSessionReady = Boolean(
+            entity.session && isReadyForDestiny(entity.session),
+          );
+          let deferredPilotPrepareStamp = null;
+          if (pendingWarp.pilotPrepareDeferred === true && pilotSessionReady) {
+            deferredPilotPrepareStamp = this.getHistorySafeDestinyStamp(
+              now,
+              PILOT_WARP_ACTIVATION_DELAY_DESTINY_TICKS,
+              PILOT_WARP_ACTIVATION_DELAY_DESTINY_TICKS,
+            );
+            pendingWarp.prepareStamp = deferredPilotPrepareStamp;
+            pendingWarp.prepareVisibleStamp =
+              this.getHistorySafeSessionDestinyStamp(
+                entity.session,
+                now,
+                PILOT_WARP_ACTIVATION_DELAY_DESTINY_TICKS,
+                PILOT_WARP_ACTIVATION_DELAY_DESTINY_TICKS,
+              );
+            const deferredPrepareDispatch = buildWarpPrepareDispatch(
+              entity,
+              deferredPilotPrepareStamp,
+              entity.warpState,
+              {
+                includePilotActivationVelocity:
+                  pendingWarp.usesFrontierNativeWarpActivation === true,
+              },
+            );
+            this.sendDestinyUpdates(
+              entity.session,
+              deferredPrepareDispatch.pilotUpdates,
+              false,
+              {
+                destinyAuthorityContract:
+                  DESTINY_CONTRACTS.CRITICAL_MOVEMENT_OR_SHIPPRIME,
+                minimumLeadFromCurrentHistory:
+                  PILOT_WARP_ACTIVATION_DELAY_DESTINY_TICKS,
+                maximumLeadFromCurrentHistory:
+                  PILOT_WARP_ACTIVATION_DELAY_DESTINY_TICKS,
+              },
+            );
+          }
           const warpState = activatePendingWarp(entity, pendingWarp, {
             nowMs: now,
             defaultEffectStamp: currentStamp,
@@ -39589,11 +39933,23 @@ class SolarSystemScene {
             });
             this.beginWarpDepartureOwnership(entity, now);
             this.beginPilotWarpVisibilityHandoff(entity, warpState, now);
-            const warpStartStamp =
-              entity.session && isReadyForDestiny(entity.session)
-                ? currentStamp
-                : this.getNextDestinyStamp(now);
+            const warpStartStamp = pilotSessionReady
+              ? (deferredPilotPrepareStamp === null
+                  ? currentStamp
+                  : deferredPilotPrepareStamp)
+              : this.getNextDestinyStamp(now);
             primePilotWarpActivationState(entity, warpState, warpStartStamp);
+            if (deferredPilotPrepareStamp !== null) {
+              // Re-anchor the pilot-perceived warp timeline on the deferred
+              // prepare: the pilot's locally simulated warp starts here, not
+              // at the original warp command (the align already happened on
+              // both timelines).
+              warpState.warpRequestedAtMs = now;
+              warpState.pilotPrepareVisibleStamp = toInt(
+                pendingWarp.prepareVisibleStamp,
+                toInt(warpState.pilotPrepareVisibleStamp, 0),
+              );
+            }
             const pilotWarpFactor = getPilotWarpFactorOptionA(entity, warpState);
             const watcherWarpStartStamp = getWatcherWarpStartStamp(
               warpState,
@@ -39934,6 +40290,12 @@ class SolarSystemScene {
               result.completedWarpState && result.completedWarpState.targetEntityID,
               toInt(entity.targetEntityID, 0),
             ),
+          });
+          autoMaterializeNearbyLandscapeSiteForAttach(this, entity, {
+            broadcast: true,
+            excludedSession: entity.session,
+            session: entity.session,
+            nowMs: now,
           });
           watcherOnlyUpdates.push({
             excludedSession: entity.session,
@@ -40605,6 +40967,19 @@ class SpaceRuntime {
           );
         }
       }
+      try {
+        const frontierRiftSceneService = lazyRequire("./frontierRiftSceneService");
+        if (
+          frontierRiftSceneService &&
+          typeof frontierRiftSceneService.handleSceneCreated === "function"
+        ) {
+          frontierRiftSceneService.handleSceneCreated(scene);
+        }
+      } catch (error) {
+        log.warn(
+          `[SpaceRuntime] Frontier Rift scene startup failed for system=${numericSystemID}: ${error.message}`,
+        );
+      }
       if (config.wormholesEnabled === true) {
         try {
           const startupStartedAtMs = Date.now();
@@ -41099,6 +41474,19 @@ class SpaceRuntime {
         nowMs: options.nowMs,
       },
     );
+    const landscapeMaterialize = autoMaterializeNearbyLandscapeSiteForAttach(
+      scene,
+      anchorEntity,
+      {
+        broadcast: options.broadcast === true,
+        excludedSession: options.excludedSession || null,
+        session:
+          options.session ||
+          (anchorEntity && anchorEntity.session) ||
+          null,
+        nowMs: options.nowMs,
+      },
+    );
     const elapsedMs = Date.now() - startedAtMs;
     if (elapsedMs >= 500) {
       const mode = options.deferred === true ? "deferred" : "inline";
@@ -41111,6 +41499,7 @@ class SpaceRuntime {
       success: !reconcile || reconcile.success !== false,
       reconcile,
       materialize,
+      landscapeMaterialize,
       elapsedMs,
     };
   }
@@ -41228,6 +41617,144 @@ class SpaceRuntime {
     }
 
     return this.scenes.get(Number(session._space.systemID)) || null;
+  }
+
+  addCustomLandscapeSite(site, options = {}) {
+    const systemID = toInt(site && site.solarSystemID, 0);
+    const scene = this.ensureScene(systemID);
+    if (!scene) {
+      return { success: false, errorMsg: "SCENE_NOT_FOUND" };
+    }
+    const entity = buildStaticLandscapeSiteEntity(site);
+    if (!entity.itemID || scene.staticEntitiesByID.has(entity.itemID)) {
+      return { success: false, errorMsg: "LANDSCAPE_SITE_ALREADY_EXISTS" };
+    }
+    if (!scene.addStaticEntity(entity)) {
+      return { success: false, errorMsg: "LANDSCAPE_SITE_ADD_FAILED" };
+    }
+    if (options.broadcast !== false) {
+      scene.broadcastAddBalls([entity], options.excludedSession || null);
+    }
+
+    const landscapeSceneService = lazyRequire("./frontierLandscapeSceneService");
+    const materializeResult = landscapeSceneService.materializeLandscapeSite(
+      scene,
+      entity,
+      {
+        broadcast: options.broadcast !== false,
+        excludedSession: options.excludedSession || null,
+        maxSceneryProps: options.maxSceneryProps,
+      },
+    );
+    if (!materializeResult || materializeResult.success !== true) {
+      scene.removeStaticEntity(entity.itemID, {
+        broadcast: options.broadcast !== false,
+        excludedSession: options.excludedSession || null,
+      });
+      return materializeResult || {
+        success: false,
+        errorMsg: "LANDSCAPE_MATERIALIZE_FAILED",
+      };
+    }
+
+    return {
+      success: true,
+      errorMsg: null,
+      data: {
+        entity,
+        materialized: materializeResult.data,
+        scene,
+      },
+    };
+  }
+
+  removeCustomLandscapeSite(siteID, systemID, options = {}) {
+    const numericSiteID = toInt(siteID, 0);
+    const numericSystemID = toInt(systemID, 0);
+    const scene = this.scenes.get(numericSystemID) || null;
+    if (!scene) {
+      return {
+        success: true,
+        errorMsg: null,
+        data: { liveSceneLoaded: false, removedProps: 0, siteID: numericSiteID },
+      };
+    }
+    const entity = scene.staticEntitiesByID.get(numericSiteID) || null;
+    if (!entity || entity.customLandscapeSite !== true) {
+      return { success: false, errorMsg: "CUSTOM_LANDSCAPE_SITE_NOT_FOUND" };
+    }
+
+    const landscapeSceneService = lazyRequire("./frontierLandscapeSceneService");
+    const dematerializeResult = landscapeSceneService.dematerializeLandscapeSite(
+      scene,
+      numericSiteID,
+      {
+        broadcast: options.broadcast !== false,
+        excludedSession: options.excludedSession || null,
+      },
+    );
+    const removeResult = scene.removeStaticEntity(numericSiteID, {
+      broadcast: options.broadcast !== false,
+      excludedSession: options.excludedSession || null,
+    });
+    if (!removeResult || removeResult.success !== true) {
+      return removeResult || {
+        success: false,
+        errorMsg: "LANDSCAPE_SITE_REMOVE_FAILED",
+      };
+    }
+    return {
+      success: true,
+      errorMsg: null,
+      data: {
+        liveSceneLoaded: true,
+        removedProps: toInt(
+          dematerializeResult &&
+            dematerializeResult.data &&
+            dematerializeResult.data.removedCount,
+          0,
+        ),
+        siteID: numericSiteID,
+      },
+    };
+  }
+
+  addCustomRiftSite(site, options = {}) {
+    const systemID = toInt(site && site.solarSystemID, 0);
+    const scene = this.ensureScene(systemID);
+    if (!scene) {
+      return { success: false, errorMsg: "SCENE_NOT_FOUND" };
+    }
+    const riftSceneService = lazyRequire("./frontierRiftSceneService");
+    const result = riftSceneService.materializeRiftSite(scene, site, {
+      broadcast: options.broadcast !== false,
+      excludedSession: options.excludedSession || null,
+    });
+    return result && result.success === true
+      ? { ...result, data: { ...result.data, scene } }
+      : result;
+  }
+
+  removeCustomRiftSite(siteID, systemID, options = {}) {
+    const numericSiteID = toInt(siteID, 0);
+    const numericSystemID = toInt(systemID, 0);
+    const scene = this.scenes.get(numericSystemID) || null;
+    if (!scene) {
+      return {
+        success: true,
+        errorMsg: null,
+        data: { liveSceneLoaded: false, siteID: numericSiteID },
+      };
+    }
+    const entity = scene.staticEntitiesByID.get(numericSiteID) || null;
+    if (!entity || entity.customFrontierRiftSite !== true) {
+      return { success: false, errorMsg: "CUSTOM_RIFT_SITE_NOT_FOUND" };
+    }
+    const riftSceneService = lazyRequire("./frontierRiftSceneService");
+    return riftSceneService.dematerializeRiftSite(scene, numericSiteID, {
+      broadcast: options.broadcast !== false,
+      excludedSession: options.excludedSession || null,
+    });
   }
 
   getSimulationTimeMsForSession(session, fallback = Date.now()) {
@@ -41898,6 +42425,16 @@ class SpaceRuntime {
   gotoDirection(session, direction, options = {}) {
     const scene = this.getSceneForSession(session);
     return scene ? scene.gotoDirection(session, direction, options) : false;
+  }
+
+  setPitch(session, pitch) {
+    const scene = this.getSceneForSession(session);
+    return scene ? scene.setPitch(session, pitch) : false;
+  }
+
+  setYawRate(session, yawRate) {
+    const scene = this.getSceneForSession(session);
+    return scene ? scene.setYawRate(session, yawRate) : false;
   }
 
   gotoPoint(session, point, options = {}) {
@@ -42967,6 +43504,9 @@ runtimeExports._testing = {
   },
   buildShipEntityForTesting: buildShipEntity,
   buildRuntimeShipEntityForTesting: buildRuntimeShipEntity,
+  getEntityRuntimeCreationDogmaContextForTesting:
+    getEntityRuntimeCreationDogmaContext,
+  getEntityRuntimeModuleOwnerItemsForTesting: getEntityRuntimeModuleOwnerItems,
   recordNpcBountyForCombatDestructionForTesting: recordNpcBountyForCombatDestruction,
   buildRuntimeSpaceEntityFromItemForTesting: buildRuntimeSpaceEntityFromItem,
   clearSessionStateFromShipEntityForTesting: clearSessionStateFromShipEntity,
@@ -42996,8 +43536,6 @@ runtimeExports._testing = {
   serializePendingWarpForTesting: serializePendingWarp,
   buildWarpStateForTesting: buildWarpState,
   buildWarpPrepareDispatchForTesting: buildWarpPrepareDispatch,
-  buildPilotWarpActivationStateRefreshUpdatesForTesting:
-    buildPilotWarpActivationStateRefreshUpdates,
   buildPilotWarpActivationUpdatesForTesting: buildPilotWarpActivationUpdates,
   buildWarpStartEffectUpdateForTesting: buildWarpStartEffectUpdate,
   buildDirectedMovementUpdatesForTesting: buildDirectedMovementUpdates,
@@ -43025,6 +43563,7 @@ runtimeExports._testing = {
   resolveCompressionFacilityTypelistsForTesting:
     resolveCompressionFacilityTypelistsForEntity,
   buildStaticStargateEntityForTesting: buildStaticStargateEntity,
+  buildStaticLandscapeSiteEntityForTesting: buildStaticLandscapeSiteEntity,
   buildStaticPlanetOrbitalEntityForTesting: buildStaticPlanetOrbitalEntity,
   buildChangedStructureRowsForTesting: buildChangedStructureRows,
   syncRuntimeStructureStateChangesForTesting:

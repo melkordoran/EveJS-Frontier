@@ -233,6 +233,7 @@ function createMovementDestinyDispatch(deps = {}) {
     "SetSpeedFraction",
     "SetBallPosition",
     "SetBallVelocity",
+    "SetBallWarpFactors",
     "CloakBall",
     "UncloakBall",
   ]);

@@ -58,6 +58,18 @@ function buildWarpToPayload(entityID, destination, distance, warpSpeed) {
   ];
 }
 
+function buildSetBallWarpFactorsPayload(
+  entityID,
+  accelerationFactor,
+  decelerationFactor,
+) {
+  return ["SetBallWarpFactors", [
+    normalizeActionEntityID(entityID),
+    buildMarshalReal(accelerationFactor, 0.001),
+    buildMarshalReal(decelerationFactor, 1 / 3000),
+  ]];
+}
+
 function buildAddBallPayload(
   entityID,
   {
@@ -119,6 +131,14 @@ function buildOrbitPayload(entityID, orbitEntityID, distance) {
 
 function buildSetSpeedFractionPayload(entityID, fraction) {
   return ["SetSpeedFraction", [normalizeActionEntityID(entityID), buildMarshalReal(fraction, 0)]];
+}
+
+function buildSetPitchPayload(entityID, pitch) {
+  return ["SetPitch", [normalizeActionEntityID(entityID), buildMarshalReal(pitch, 0)]];
+}
+
+function buildSetYawRatePayload(entityID, yawRate) {
+  return ["SetYawRate", [normalizeActionEntityID(entityID), buildMarshalReal(yawRate, 0)]];
 }
 
 function buildStopPayload(entityID) {
@@ -386,10 +406,13 @@ module.exports = {
   buildSetBallRotationPayload,
   buildSetBallTrollPayload,
   buildSetBallVelocityPayload,
+  buildSetBallWarpFactorsPayload,
   buildSetMaxAngularSpeedPayload,
   buildSetMaxAngularVelocityPayload,
   buildSetMaxSpeedPayload,
+  buildSetPitchPayload,
   buildSetSpeedFractionPayload,
+  buildSetYawRatePayload,
   buildStopPayload,
   buildTerminalPlayDestructionEffectPayload,
   buildUncloakBallPayload,

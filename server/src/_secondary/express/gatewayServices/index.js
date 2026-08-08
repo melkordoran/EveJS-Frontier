@@ -1,4 +1,16 @@
 const { createCompatibilityGatewayService } = require("./compatibilityGatewayService");
+const {
+  createAssemblyGateGatewayService,
+} = require("./assemblyGateGatewayService");
+const {
+  createAssemblyNetworkNodeGatewayService,
+} = require("./assemblyNetworkNodeGatewayService");
+const {
+  createFrontierWalletGatewayService,
+} = require("./frontierWalletGatewayService");
+const {
+  createFrontierTokenExchangeGatewayService,
+} = require("./frontierTokenExchangeGatewayService");
 const { createCorpGoalsGatewayService } = require("./corpGoalsGatewayService");
 const { createCorpColorsGatewayService } = require("./corpColorsGatewayService");
 const { createEvermarksGatewayService } = require("./evermarksGatewayService");
@@ -44,6 +56,10 @@ const {
 
 function createGatewayServiceRegistry(context) {
   const services = [
+    createAssemblyGateGatewayService(context),
+    createAssemblyNetworkNodeGatewayService(context),
+    createFrontierWalletGatewayService(context),
+    createFrontierTokenExchangeGatewayService(context),
     createCorpGoalsGatewayService(context),
     createCorpColorsGatewayService(context),
     createEvermarksGatewayService(context),

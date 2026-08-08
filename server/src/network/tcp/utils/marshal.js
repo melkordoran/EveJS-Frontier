@@ -333,7 +333,11 @@ function encodeValue(value, chunks, context = {}) {
         return;
       }
       case "token": {
-        const tokenBuf = Buffer.from(value.value, "utf8");
+        const tokenValue =
+          context.frontierText && value.value === "__builtin__.set"
+            ? "builtins.set"
+            : value.value;
+        const tokenBuf = Buffer.from(tokenValue, "utf8");
         chunks.push(Buffer.from([Op.PyToken]));
         putSizeEx(tokenBuf.length, chunks);
         chunks.push(tokenBuf);
@@ -507,13 +511,15 @@ function encodeFrontierString(str, chunks) {
 }
 
 function encodeObject(obj, chunks, context) {
+  const objectName = strVal(obj.name);
+
   if (context.frontierText) {
     // Frontier's Python 3 marshal stream represents named MachoNet objects as
     // ObjectEx2: [[class token], state]. The legacy PyObject opcode is rejected.
     chunks.push(Buffer.from([Op.PyObjectEx2]));
     encodeValue(
       [
-        [{ type: "token", value: obj.name }],
+        [{ type: "token", value: objectName }],
         obj.args,
       ],
       chunks,
@@ -529,7 +535,7 @@ function encodeObject(obj, chunks, context) {
   // through the visitor pattern — NOT as Op.PyToken (0x02).
   chunks.push(Buffer.from([Op.PyObject]));
   // Encode type name as a regular string (will use string table if available)
-  encodeLegacyString(obj.name, chunks);
+  encodeLegacyString(objectName, chunks);
   // Args
   encodeValue(obj.args, chunks, context);
 }
@@ -1502,8 +1508,11 @@ function decodeValue(state) {
     }
 
     case Op.PyWStringUCS2Char: {
-      const data = readBytes(state, 2);
-      result = { type: "wstring", value: data.toString("utf16le") };
+      const isFrontier = state.compatibilityProfile === "frontier";
+      const data = readBytes(state, isFrontier ? 1 : 2);
+      result = isFrontier
+        ? data.toString("utf8")
+        : { type: "wstring", value: data.toString("utf16le") };
       break;
     }
 

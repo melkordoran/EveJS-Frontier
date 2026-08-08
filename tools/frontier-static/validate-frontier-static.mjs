@@ -12,9 +12,17 @@ const REPO_ROOT = path.resolve(SCRIPT_DIR, "../..");
 const REQUIRED_FILES = [
   "_sde.jsonl",
   "categories.jsonl",
+  "creationHardpointTypes.jsonl",
+  "creationModules.jsonl",
+  "creationParts.jsonl",
+  "creationTemplates.jsonl",
   "dogmaAttributes.jsonl",
   "dogmaEffects.jsonl",
+  "frontierDungeonTemplates.jsonl",
   "groups.jsonl",
+  "landscapeDungeonTemplates.jsonl",
+  "landscapeEcosystems.jsonl",
+  "landscapeSites.jsonl",
   "locationCache.jsonl",
   "mapConstellations.jsonl",
   "mapJumps.jsonl",
@@ -26,6 +34,7 @@ const REQUIRED_FILES = [
   "mapStargates.jsonl",
   "mapStars.jsonl",
   "npcStations.jsonl",
+  "spaceComponentsByType.jsonl",
   "typeDogma.jsonl",
   "types.jsonl",
 ];
@@ -143,6 +152,152 @@ async function validateSnapshot(snapshot) {
     assert(groupCategory.has(Number(row.groupID)), `Type ${row._key} references group ${row.groupID}`);
     assert(row.name && typeof row.name.en === "string", `Type ${row._key} has no English name`);
   });
+  const typeIDs = types.keys;
+
+  const creationHardpointTypeIDs = (
+    await load("creationHardpointTypes.jsonl")
+  ).keys;
+  const creationModuleIDs = (await load("creationModules.jsonl", (row) => {
+    const typeID = Number(row._key);
+    const placement = row.placement && typeof row.placement === "object"
+      ? row.placement
+      : {};
+    for (const hardpointType of placement.hardpoints || []) {
+      assert(
+        creationHardpointTypeIDs.has(String(hardpointType)),
+        `Creation module ${typeID} references unknown hardpoint ${hardpointType}`,
+      );
+    }
+    for (const hardpointType of placement.compatible_hardpoints || []) {
+      assert(
+        creationHardpointTypeIDs.has(String(hardpointType)),
+        `Creation module ${typeID} references unknown compatible hardpoint ${hardpointType}`,
+      );
+    }
+  })).keys;
+  const creationParts = await load("creationParts.jsonl");
+  const creationTemplates = await load("creationTemplates.jsonl", (row) => {
+    const typeID = Number(row._key);
+    assert(typeIDs.has(String(typeID)), `Creation template ${typeID} has unknown hull type`);
+    assert(row.parts && typeof row.parts === "object", `Creation template ${typeID} has no parts`);
+    const templatePartIDs = new Set(Object.keys(row.parts).map(String));
+    for (const [partID, part] of Object.entries(row.parts)) {
+      assert(
+        creationParts.keys.has(String(part && part.graphic_id)),
+        `Creation template ${typeID} part ${partID} has unknown graphic ${part && part.graphic_id}`,
+      );
+      assert(Array.isArray(part.position), `Creation template ${typeID} part ${partID} has no position`);
+      assert(Array.isArray(part.rotation), `Creation template ${typeID} part ${partID} has no rotation`);
+    }
+    const interiorModules = row.interior_modules || [];
+    assert(Array.isArray(interiorModules), `Creation template ${typeID} has invalid interior modules`);
+    for (const module of interiorModules) {
+      assert(
+        creationModuleIDs.has(String(module.type_id)),
+        `Creation template ${typeID} references unknown module ${module.type_id}`,
+      );
+      assert(
+        templatePartIDs.has(String(module.part_id)),
+        `Creation template ${typeID} module ${module.type_id} references unknown part ${module.part_id}`,
+      );
+      assert(Array.isArray(module.position), `Creation template ${typeID} module ${module.type_id} has no position`);
+      assert(Array.isArray(module.rotation), `Creation template ${typeID} module ${module.type_id} has no rotation`);
+      for (const [hardpointIndex, hardpoint] of (module.hardpoints || []).entries()) {
+        assert(
+          templatePartIDs.has(String(hardpoint.part_id)),
+          `Creation template ${typeID} module ${module.type_id} hardpoint ${hardpointIndex} references unknown part ${hardpoint.part_id}`,
+        );
+        assert(
+          !hardpoint.exterior_type_id || creationModuleIDs.has(String(hardpoint.exterior_type_id)),
+          `Creation template ${typeID} module ${module.type_id} hardpoint ${hardpointIndex} references unknown exterior module ${hardpoint.exterior_type_id}`,
+        );
+        assert(Array.isArray(hardpoint.position), `Creation template ${typeID} module ${module.type_id} hardpoint ${hardpointIndex} has no position`);
+        assert(Array.isArray(hardpoint.rotation), `Creation template ${typeID} module ${module.type_id} hardpoint ${hardpointIndex} has no rotation`);
+      }
+    }
+  });
+  assert(creationParts.count > 0, "Frontier creation data contains no hull parts");
+  assert(creationTemplates.count > 0, "Frontier creation data contains no ship templates");
+
+  const frontierDungeonIDs = new Set();
+  await load("frontierDungeonTemplates.jsonl", (row) => {
+    const dungeonID = Number(row._key);
+    frontierDungeonIDs.add(dungeonID);
+    assert(Number(row.dungeonID) === dungeonID, `Frontier dungeon ${dungeonID} has mismatched dungeonID`);
+    assert(Array.isArray(row.rooms), `Frontier dungeon ${dungeonID} has no rooms`);
+    assert(Array.isArray(row.triggers), `Frontier dungeon ${dungeonID} has no triggers`);
+    for (const room of row.rooms) {
+      assert(Number(room.roomID) > 0, `Frontier dungeon ${dungeonID} has an invalid room`);
+      assert(Array.isArray(room.objects), `Frontier dungeon ${dungeonID} room ${room.roomID} has no objects`);
+      for (const object of room.objects) {
+        assert(Number(object.objectID) > 0, `Frontier dungeon ${dungeonID} has an invalid object`);
+        assert(
+          typeIDs.has(String(object.typeID)),
+          `Frontier dungeon ${dungeonID} object ${object.objectID} has unknown type ${object.typeID}`,
+        );
+      }
+    }
+  });
+  assert(frontierDungeonIDs.size > 0, "Frontier dungeon authority is empty");
+
+  const landscapeDungeonIDs = new Set();
+  await load("landscapeDungeonTemplates.jsonl", (row) => {
+    const dungeonID = Number(row._key);
+    landscapeDungeonIDs.add(dungeonID);
+    assert(Number(row.dungeonID) === dungeonID, `Landscape dungeon ${dungeonID} has mismatched dungeonID`);
+    assert(Array.isArray(row.rooms), `Landscape dungeon ${dungeonID} has no rooms`);
+    for (const room of row.rooms) {
+      assert(Number(room.roomID) > 0, `Landscape dungeon ${dungeonID} has an invalid room`);
+      assert(Array.isArray(room.objects), `Landscape dungeon ${dungeonID} room ${room.roomID} has no objects`);
+      for (const object of room.objects) {
+        assert(Number(object.objectID) > 0, `Landscape dungeon ${dungeonID} has an invalid object`);
+        assert(
+          typeIDs.has(String(object.typeID)),
+          `Landscape dungeon ${dungeonID} object ${object.objectID} has unknown type ${object.typeID}`,
+        );
+        assert(
+          ["entryLocator", "eventLocator", "poiLocator", "resourceLocator", "scenery"].includes(object.role),
+          `Landscape dungeon ${dungeonID} object ${object.objectID} has invalid role ${object.role}`,
+        );
+      }
+    }
+  });
+
+  const landscapeEcosystemIDs = new Set();
+  await load("landscapeEcosystems.jsonl", (row) => {
+    const ecosystemID = Number(row._key);
+    landscapeEcosystemIDs.add(ecosystemID);
+    assert(Number(row.ecosystemID) === ecosystemID, `Landscape ecosystem ${ecosystemID} has mismatched ecosystemID`);
+    assert(
+      landscapeDungeonIDs.has(Number(row.entryDungeonID)),
+      `Landscape ecosystem ${ecosystemID} has unknown entry dungeon ${row.entryDungeonID}`,
+    );
+    for (const fieldName of ["naturalWorldPatterns", "brokenWorldPatterns"]) {
+      assert(Array.isArray(row[fieldName]), `Landscape ecosystem ${ecosystemID} has no ${fieldName}`);
+      for (const pattern of row[fieldName]) {
+        assert(
+          landscapeDungeonIDs.has(Number(pattern.dungeonID)),
+          `Landscape ecosystem ${ecosystemID} has unknown pattern dungeon ${pattern.dungeonID}`,
+        );
+      }
+    }
+  });
+
+  const componentsByTypeID = new Map();
+  await load("spaceComponentsByType.jsonl", (row) => {
+    componentsByTypeID.set(Number(row._key), row);
+  });
+  const relayComponents = componentsByTypeID.get(90184);
+  const relaySiteComponents = componentsByTypeID.get(91717);
+  assert(relayComponents, "Relay type 90184 has no space-component definition");
+  assert(
+    Number(relayComponents.smartDeployable?.constructionSite) === 91717,
+    "Relay type 90184 does not map to construction site 91717",
+  );
+  assert(
+    relaySiteComponents?.assemblyConstruction,
+    "Relay construction site 91717 has no assemblyConstruction component",
+  );
 
   const systemIDs = new Set();
   const systemStarIDs = new Map();
@@ -150,6 +305,39 @@ async function validateSnapshot(snapshot) {
     systemIDs.add(Number(row._key));
     systemStarIDs.set(Number(row._key), Number(row.starID));
   });
+
+  const landscapeSiteIDs = new Set();
+  const landscapeSites = await load("landscapeSites.jsonl", (row) => {
+    const siteID = Number(row._key);
+    landscapeSiteIDs.add(siteID);
+    assert(Number(row.siteID) === siteID, `Landscape site ${siteID} has mismatched siteID`);
+    assert(
+      systemIDs.has(Number(row.solarSystemID)),
+      `Landscape site ${siteID} has unknown system ${row.solarSystemID}`,
+    );
+    assert(
+      typeIDs.has(String(row.typeID)),
+      `Landscape site ${siteID} has unknown type ${row.typeID}`,
+    );
+    assert(
+      landscapeEcosystemIDs.has(Number(row.ecosystemID)),
+      `Landscape site ${siteID} has unknown ecosystem ${row.ecosystemID}`,
+    );
+    assert(
+      landscapeDungeonIDs.has(Number(row.dungeonID)),
+      `Landscape site ${siteID} has unknown dungeon ${row.dungeonID}`,
+    );
+    assert(
+      row.featureKind === "asteroidBelt" || row.featureKind === "trojan",
+      `Landscape site ${siteID} has invalid feature kind ${row.featureKind}`,
+    );
+    assert(Number(row.dungeonID) > 0, `Landscape site ${siteID} has no dungeon`);
+    assert(
+      row.position && ["x", "y", "z"].every((axis) => Number.isFinite(Number(row.position[axis]))),
+      `Landscape site ${siteID} has an invalid position`,
+    );
+  });
+  assert(landscapeSites.count > 0, "Frontier landscape contains no sites");
 
   const stars = await load("mapStars.jsonl", (row) => {
     assert(systemIDs.has(Number(row.solarSystemID)), `Star ${row._key} has unknown system`);
@@ -205,8 +393,12 @@ async function validateSnapshot(snapshot) {
   const checked = {
     build: manifest.source.client.build,
     categories: categoryIDs.size,
+    frontierDungeons: frontierDungeonIDs.size,
     groups: groups.count,
+    landscapeDungeons: landscapeDungeonIDs.size,
+    landscapeEcosystems: landscapeEcosystemIDs.size,
     stargates: stargates.count,
+    landscapeSites: landscapeSiteIDs.size,
     systems: systems.count,
     types: types.count,
   };
@@ -224,6 +416,7 @@ async function main() {
   console.log(
     `[frontier-static] Valid build ${checked.build}: ` +
     `${checked.systems.toLocaleString()} systems, ` +
+    `${checked.landscapeSites.toLocaleString()} landscape sites, ` +
     `${checked.types.toLocaleString()} types, ` +
     `${checked.stargates.toLocaleString()} stargates.`,
   );
