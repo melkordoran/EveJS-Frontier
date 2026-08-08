@@ -6,6 +6,9 @@ const {
   createAssemblyNetworkNodeGatewayService,
 } = require("./assemblyNetworkNodeGatewayService");
 const {
+  createAssemblyStorageUnitGatewayService,
+} = require("./assemblyStorageUnitGatewayService");
+const {
   createFrontierWalletGatewayService,
 } = require("./frontierWalletGatewayService");
 const {
@@ -58,6 +61,7 @@ function createGatewayServiceRegistry(context) {
   const services = [
     createAssemblyGateGatewayService(context),
     createAssemblyNetworkNodeGatewayService(context),
+    createAssemblyStorageUnitGatewayService(context),
     createFrontierWalletGatewayService(context),
     createFrontierTokenExchangeGatewayService(context),
     createCorpGoalsGatewayService(context),

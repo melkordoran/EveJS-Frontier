@@ -62,6 +62,10 @@ const {
 const {
   listIndustryJobsOverLast24Hours,
 } = require(path.join(__dirname, "../industry/industryRuntimeState"));
+const sessionRegistry = require(path.join(
+  __dirname,
+  "../chat/sessionRegistry",
+));
 
 const MAP_ROWSET = "eve.common.script.sys.rowset.Rowset";
 const HISTORY_COLUMNS = Object.freeze(["solarSystemID", "value1", "value2", "value3"]);
@@ -169,6 +173,67 @@ function buildEmptyRowset(columns) {
 
 function getSessionCharacterID(session) {
   return Number(session && (session.characterID || session.charid || session.userid)) || 0;
+}
+
+function getSessionCorporationID(session) {
+  return toPositiveInteger(
+    session && (session.corporationID || session.corpid || session.corpID),
+    0,
+  );
+}
+
+function getSessionSolarSystemID(session) {
+  const solarSystemID = toPositiveInteger(
+    session &&
+      (session.solarsystemid2 ||
+        session.solarsystemid ||
+        session.solarSystemID ||
+        (session._space && (session._space.systemID || session._space.solarSystemID))),
+    0,
+  );
+  if (solarSystemID > 0) {
+    return solarSystemID;
+  }
+
+  const locationID = toPositiveInteger(
+    session && (session.locationid || session.locationID),
+    0,
+  );
+  return locationID >= 30000000 && locationID < 40000000 ? locationID : 0;
+}
+
+function buildCorporationMemberMapRows(
+  requestingSession,
+  liveSessions = sessionRegistry.getSessions(),
+) {
+  const corporationID = getSessionCorporationID(requestingSession);
+  if (corporationID <= 0 || !Array.isArray(liveSessions)) {
+    return [];
+  }
+
+  const preferredSessionByCharacterID = new Map();
+  for (const candidate of liveSessions) {
+    const characterID = getSessionCharacterID(candidate);
+    if (
+      characterID <= 0 ||
+      getSessionCorporationID(candidate) !== corporationID ||
+      getSessionSolarSystemID(candidate) <= 0
+    ) {
+      continue;
+    }
+
+    const current = preferredSessionByCharacterID.get(characterID) || null;
+    if (sessionRegistry.isPreferredCharacterSession(candidate, current)) {
+      preferredSessionByCharacterID.set(characterID, candidate);
+    }
+  }
+
+  return [...preferredSessionByCharacterID.entries()]
+    .sort((left, right) => left[0] - right[0])
+    .map(([characterID, memberSession]) => [
+      characterID,
+      getSessionSolarSystemID(memberSession),
+    ]);
 }
 
 function getItemTypeByID(typeID) {
@@ -577,9 +642,13 @@ class MapService extends BaseService {
     return buildIndustryCostIndexDict(activityID);
   }
 
-  Handle_GetMyExtraMapInfo() {
-    log.debug("[MapService] GetMyExtraMapInfo called");
-    return buildEmptyRowset(CORP_MEMBER_COLUMNS);
+  Handle_GetMyExtraMapInfo(_args, session) {
+    const corporationID = getSessionCorporationID(session);
+    const rows = buildCorporationMemberMapRows(session);
+    log.debug(
+      `[MapService] GetMyExtraMapInfo corporationID=${corporationID} rows=${rows.length}`,
+    );
+    return buildRowset(CORP_MEMBER_COLUMNS, rows, MAP_ROWSET);
   }
 
   Handle_GetMyExtraMapInfoAgents() {
@@ -711,3 +780,8 @@ class MapService extends BaseService {
 }
 
 module.exports = MapService;
+module.exports._testing = {
+  buildCorporationMemberMapRows,
+  getSessionCorporationID,
+  getSessionSolarSystemID,
+};

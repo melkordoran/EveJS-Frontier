@@ -146,6 +146,7 @@ upsert_arg "/server:" "/server:${SERVER_HOST}"
 upsert_arg "/settingsprofile=" "/settingsprofile=${SETTINGS_PROFILE}"
 upsert_arg "/language=" "/language=en"
 upsert_arg "/cryptoPack=" "/cryptoPack=Placebo"
+upsert_arg "/remotefilecachefolder=" "/remotefilecachefolder=${RESFILES}"
 
 mkdir -p "$LOG_ROOT"
 STDOUT_LOG="${LOG_ROOT}/client-stdout.log"

@@ -24,7 +24,9 @@ const {
   getAllLicensedSkinRecords,
   getLicensedSkinRecordsForType,
   getEffectiveLicenseRecord,
+  getAppliedSkinRecord,
   getLicenseCatalogEntry,
+  getSkinMaterialSetIDForSkin,
   giveSkin,
   removeSkin,
   expireSkin,
@@ -79,6 +81,91 @@ function getSessionCharacterID(session) {
           session.characterId),
     ) || 0
   );
+}
+
+function resolveOwnedShipItem(shipID, characterID, options = {}) {
+  const numericShipID = Number(shipID || 0) || 0;
+  const numericCharacterID = Number(characterID || 0) || 0;
+  if (numericShipID <= 0 || numericCharacterID <= 0) {
+    return null;
+  }
+
+  const resolveItem =
+    typeof options.findItemById === "function"
+      ? options.findItemById
+      : findItemById;
+  const item = resolveItem(numericShipID);
+  return item && Number(item.ownerID || 0) === numericCharacterID
+    ? item
+    : null;
+}
+
+function resolveAppliedSkinLicenseRecord(
+  licenseeID,
+  itemID,
+  hullTypeID,
+  options = {},
+) {
+  const numericItemID = Number(itemID || 0) || 0;
+  if (numericItemID <= 0) {
+    return null;
+  }
+
+  const resolveAppliedRecord =
+    typeof options.getAppliedSkinRecord === "function"
+      ? options.getAppliedSkinRecord
+      : getAppliedSkinRecord;
+  const resolveItem =
+    typeof options.findItemById === "function"
+      ? options.findItemById
+      : findItemById;
+  const resolveLicense =
+    typeof options.getEffectiveLicenseRecord === "function"
+      ? options.getEffectiveLicenseRecord
+      : getEffectiveLicenseRecord;
+
+  const appliedRecord = resolveAppliedRecord(numericItemID);
+  const skinID = Number(appliedRecord && appliedRecord.skinID) || 0;
+  if (!appliedRecord || skinID <= 0) {
+    return null;
+  }
+
+  const item = resolveItem(numericItemID);
+  const storedTypeID = Number(appliedRecord.typeID || 0) || 0;
+  const itemTypeID = Number(item && item.typeID) || 0;
+  const requestedTypeID = Number(hullTypeID || 0) || 0;
+  if (
+    (storedTypeID > 0 && itemTypeID > 0 && storedTypeID !== itemTypeID) ||
+    (requestedTypeID > 0 &&
+      (itemTypeID || storedTypeID) > 0 &&
+      requestedTypeID !== (itemTypeID || storedTypeID))
+  ) {
+    return null;
+  }
+
+  const requestedLicenseeID = Number(licenseeID || 0) || 0;
+  const appliedOwnerIDs = new Set(
+    [
+      appliedRecord.characterID,
+      appliedRecord.ownerID,
+      item && item.ownerID,
+    ]
+      .map((value) => Number(value || 0) || 0)
+      .filter((value) => value > 0),
+  );
+  if (
+    requestedLicenseeID > 0 &&
+    appliedOwnerIDs.size > 0 &&
+    !appliedOwnerIDs.has(requestedLicenseeID)
+  ) {
+    return null;
+  }
+
+  const effectiveLicenseeID =
+    requestedLicenseeID || appliedOwnerIDs.values().next().value || 0;
+  return effectiveLicenseeID > 0
+    ? resolveLicense(effectiveLicenseeID, skinID)
+    : null;
 }
 
 function normalizeItemIDs(rawValue) {
@@ -222,8 +309,8 @@ function broadcastLiveShipSlimRefresh(shipID) {
 }
 
 class ShipCosmeticsMgrService extends BaseService {
-  constructor() {
-    super("shipCosmeticsMgr");
+  constructor(serviceName = "shipCosmeticsMgr") {
+    super(serviceName);
   }
 
   Handle_GetEnabledCosmetics(args, session, kwargs) {
@@ -284,6 +371,34 @@ class ShipCosmeticsMgrService extends BaseService {
     return record ? buildLicensedSkinKeyVal(record) : null;
   }
 
+  Handle_GetAppliedSkin(args) {
+    const licenseeID = Number(args && args.length > 0 ? args[0] : 0) || 0;
+    const itemID = Number(args && args.length > 1 ? args[1] : 0) || 0;
+    const hullTypeID = Number(args && args.length > 2 ? args[2] : 0) || 0;
+    const record = resolveAppliedSkinLicenseRecord(
+      licenseeID,
+      itemID,
+      hullTypeID,
+    );
+    log.debug(
+      `[${this.name}] GetAppliedSkin(licenseeID=${licenseeID}, itemID=${itemID}, ` +
+        `hullTypeID=${hullTypeID}) -> ${record ? record.skinID : "none"}`,
+    );
+    return record ? buildLicensedSkinKeyVal(record) : null;
+  }
+
+  Handle_GetAppliedSkinMaterialSetID(args) {
+    const licenseeID = Number(args && args.length > 0 ? args[0] : 0) || 0;
+    const itemID = Number(args && args.length > 1 ? args[1] : 0) || 0;
+    const hullTypeID = Number(args && args.length > 2 ? args[2] : 0) || 0;
+    const record = resolveAppliedSkinLicenseRecord(
+      licenseeID,
+      itemID,
+      hullTypeID,
+    );
+    return record ? getSkinMaterialSetIDForSkin(record.skinID) : null;
+  }
+
   Handle_ApplySkinToShip(args, session) {
     const shipID = Number(args && args.length > 0 ? args[0] : 0) || 0;
     const skinID =
@@ -291,6 +406,9 @@ class ShipCosmeticsMgrService extends BaseService {
         ? Number(args[1] || 0) || 0
         : null;
     const activeCharacterID = getSessionCharacterID(session);
+    if (!resolveOwnedShipItem(shipID, activeCharacterID)) {
+      throwNotify("You can only apply a SKIN to a ship you own.");
+    }
     const finalResult = applySkinToShip(shipID, skinID, {
       characterID: activeCharacterID,
     });
@@ -432,3 +550,8 @@ class ShipCosmeticsMgrService extends BaseService {
 }
 
 module.exports = ShipCosmeticsMgrService;
+module.exports._testing = {
+  buildLicensedSkinKeyVal,
+  resolveAppliedSkinLicenseRecord,
+  resolveOwnedShipItem,
+};

@@ -2030,7 +2030,7 @@ const WEB_CALL_ALLOWLIST = Object.freeze([
   //
   // Eleventh batch of the operator's plumbing sweep — reads made reachable +
   // decodable so a later goal builds UI cheaply; NO panel/tab/store slice ships.
-  // SEVENTEEN read-only pairs on ONE service (map / services/map/mapService.js),
+  // SIXTEEN read-only pairs on ONE service (map / services/map/mapService.js),
   // each grep-confirmed to have an existing TOP-LEVEL Handle_* (map extends
   // BaseService super("map") with NO MachoBindObject — the R1/R2 GetStationInfo
   // pair already dispatches top-level, proving the whole service is). Never a new
@@ -2041,10 +2041,11 @@ const WEB_CALL_ALLOWLIST = Object.freeze([
   // reads are PUBLIC starmap/region data (sov, incursion, fac-war, beacon counts,
   // station counts) — no owner/location arg points them at another player. The
   // four flagged reads were each checked against the handler AND live:
-  //   • GetMyExtraMapInfo / GetMyExtraMapInfoAgents — DESPITE the "My" prefix,
-  //     both handlers return a HARDCODED buildEmptyRowset and read NOTHING from
-  //     the session or any store, so there is no data to leak by construction;
-  //     live they return an empty rowset. Safe.
+  //   • GetMyExtraMapInfoAgents still returns a hardcoded empty rowset.
+  //     GetMyExtraMapInfo now exposes live corporation-member locations to the
+  //     native client and is intentionally NOT web-call allowlisted: browser
+  //     sessions carry caller-supplied scalar fields and cannot prove corporation
+  //     membership strongly enough for that private overlay.
   //   • GetSolarSystemVisits — session-scoped via getSessionCharacterID(session)
   //     with NO arg that can override the character, so it returns ONLY the
   //     session's own visit rows; a caller cannot point it at another character.
@@ -2092,11 +2093,8 @@ const WEB_CALL_ALLOWLIST = Object.freeze([
   //   "no overlay" answer, not a failure; args[0]=languageID.
   Object.freeze({ service: "map", method: "GetDeadspaceAgentsMap" }),
   Object.freeze({ service: "map", method: "GetDeadspaceComplexMap" }),
-  // GetMyExtraMapInfo() -> EMPTY Rowset[characterID, locationID];
-  // GetMyExtraMapInfoAgents() -> EMPTY Rowset[fromID, rank]. ⚠ Both return a
-  //   HARDCODED empty rowset and read NOTHING off the session (see ownership note
-  //   above) — no cross-character leak is possible. Argless.
-  Object.freeze({ service: "map", method: "GetMyExtraMapInfo" }),
+  // GetMyExtraMapInfoAgents() -> EMPTY Rowset[fromID, rank]. The private
+  //   GetMyExtraMapInfo corporation-location overlay is native-client-only.
   Object.freeze({ service: "map", method: "GetMyExtraMapInfoAgents" }),
   // GetConstellationLPData(constellationID) -> EMPTY Rowset[solarSystemID,
   //   loyaltyPoints] (the FW LP overlay is not seeded). Public; args[0]=constellationID.
