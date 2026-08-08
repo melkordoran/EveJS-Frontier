@@ -2588,6 +2588,60 @@ test("Frontier rigid balls include the native orientation fields", () => {
   assert.equal(tranquility.readUInt8(38), 0xff);
 });
 
+test("Frontier free balls seed dynamical orientation from persisted heading", () => {
+  const direction = {
+    x: -0.8777118331130881,
+    y: -0.05027250766675655,
+    z: 0.47654445016824865,
+  };
+  const encoded = encodeEntityBall({
+    itemID: 9988400001895,
+    kind: "ship",
+    mode: "STOP",
+    radius: 1,
+    position: { x: 1, y: 2, z: 3 },
+    velocity: { x: 0, y: 0, z: 0 },
+    direction,
+  }, {
+    compatibilityProfile: "frontier",
+  });
+
+  const orientation = {
+    w: encoded.readDoubleLE(42),
+    x: encoded.readDoubleLE(50),
+    y: encoded.readDoubleLE(58),
+    z: encoded.readDoubleLE(66),
+  };
+  const rotatedForward = {
+    x: 2 * ((orientation.x * orientation.z) + (orientation.w * orientation.y)),
+    y: 2 * ((orientation.y * orientation.z) - (orientation.w * orientation.x)),
+    z: 1 - (2 * ((orientation.x ** 2) + (orientation.y ** 2))),
+  };
+  const rotatedUp = {
+    x: 2 * ((orientation.x * orientation.y) - (orientation.w * orientation.z)),
+    y: 1 - (2 * ((orientation.x ** 2) + (orientation.z ** 2))),
+    z: 2 * ((orientation.y * orientation.z) + (orientation.w * orientation.x)),
+  };
+  const horizontal = Math.hypot(direction.x, direction.z);
+  const expectedUp = {
+    x: -direction.y * (direction.x / horizontal),
+    y: horizontal,
+    z: -direction.y * (direction.z / horizontal),
+  };
+  assert.ok(Math.abs(Math.hypot(
+    orientation.w,
+    orientation.x,
+    orientation.y,
+    orientation.z,
+  ) - 1) < 1e-12);
+  assert.ok(Math.abs(rotatedForward.x - direction.x) < 1e-12);
+  assert.ok(Math.abs(rotatedForward.y - direction.y) < 1e-12);
+  assert.ok(Math.abs(rotatedForward.z - direction.z) < 1e-12);
+  assert.ok(Math.abs(rotatedUp.x - expectedUp.x) < 1e-12);
+  assert.ok(Math.abs(rotatedUp.y - expectedUp.y) < 1e-12);
+  assert.ok(Math.abs(rotatedUp.z - expectedUp.z) < 1e-12);
+});
+
 test("Frontier free GOTO balls match the native mode trailer", () => {
   const entity = {
     itemID: 9002,
@@ -2605,6 +2659,7 @@ test("Frontier free GOTO balls match the native mode trailer", () => {
     angularAgility: 0.6,
     inertia: 0.5,
     speedFraction: 1,
+    direction: { x: 0, y: 0, z: 1 },
     targetPoint: { x: 7, y: 8, z: 9 },
   };
   const encoded = encodeEntityBall(entity, {

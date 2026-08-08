@@ -301,6 +301,31 @@ function getShipDirection(entity) {
   return { x: 1, y: 0, z: 0 };
 }
 
+function getFrontierBallOrientation(entity) {
+  const direction = getShipDirection(entity);
+  const yaw = Math.atan2(direction.x, direction.z);
+  const pitch = Math.asin(Math.max(-1, Math.min(1, direction.y)));
+  const cosineYaw = Math.cos(yaw / 2);
+  const sineYaw = Math.sin(yaw / 2);
+  const cosinePitch = Math.cos(pitch / 2);
+  const sinePitch = Math.sin(pitch / 2);
+
+  // Frontier's dynamical-orientation stream stores the quaternion as
+  // scalar + vector (w, x, y, z). Native Destiny uses +Z as forward and
+  // resolves its heading quaternion with world +Y kept upright. Seed that
+  // roll-corrected yaw/pitch orientation from the authoritative direction.
+  // Without this, reconnecting a stopped ship always presents identity to
+  // the client even when the persisted server heading points elsewhere;
+  // subsequent pitch/yaw/speed inputs then move the two simulations in
+  // different world-space directions.
+  return {
+    w: cosineYaw * cosinePitch,
+    x: -cosineYaw * sinePitch,
+    y: sineYaw * cosinePitch,
+    z: sineYaw * sinePitch,
+  };
+}
+
 function getShipWarpFactor(entity) {
   const warpState = entity && entity.warpState;
   const factor = toInt32(
@@ -467,17 +492,25 @@ function encodeRigidBall(entity) {
   return Buffer.concat(chunks);
 }
 
-function appendFrontierCommonBallTail(chunks, entity) {
+function appendFrontierCommonBallTail(chunks, entity, options = {}) {
   pushInt32(
     chunks,
     toInt32(entity && entity.surfaceType, -0x80000000),
   );
   // Frontier enables dynamical orientation before Michelle reads SetState.
-  // The native stream stores an identity quaternion as scalar + vector.
-  pushDouble(chunks, 1);
-  pushDouble(chunks, 0);
-  pushDouble(chunks, 0);
-  pushDouble(chunks, 0);
+  // Rigid entities retain the native identity default; free balls must seed
+  // the persisted heading so client and server manual flight start aligned.
+  const orientation = (
+    options.useEntityDirection === true &&
+    entity &&
+    entity.kind === "ship"
+  )
+    ? getFrontierBallOrientation(entity)
+    : { w: 1, x: 0, y: 0, z: 0 };
+  pushDouble(chunks, orientation.w);
+  pushDouble(chunks, orientation.x);
+  pushDouble(chunks, orientation.y);
+  pushDouble(chunks, orientation.z);
   pushInt32(chunks, toInt32(entity && entity.collisionID, -1));
   pushFloat(chunks, toFiniteNumber(entity && entity.collisionScale, 1));
 }
@@ -582,7 +615,9 @@ function encodeFrontierFreeBall(entity, options = {}) {
   pushDouble(chunks, position.y);
   pushDouble(chunks, position.z);
   pushUInt8(chunks, getFreeBallFlags(encodedEntity));
-  appendFrontierCommonBallTail(chunks, encodedEntity);
+  appendFrontierCommonBallTail(chunks, encodedEntity, {
+    useEntityDirection: true,
+  });
 
   const fallbackMass = (
     encodedEntity.kind === "container" || encodedEntity.kind === "wreck"

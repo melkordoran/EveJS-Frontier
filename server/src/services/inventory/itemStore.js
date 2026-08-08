@@ -67,6 +67,7 @@ const ITEM_FLAGS = {
   HANGAR: 4,
   CARGO_HOLD: 5,
   CORP_DELIVERIES: 62,
+  SMART_STORAGE_UNIT: 66,
   FUEL_BAY: FUEL_BAY_FLAG,
   DRONE_BAY: 87,
   SHIP_HANGAR: 90,
@@ -3507,22 +3508,18 @@ function buildMovedItemState(currentItem, destinationLocationID, destinationFlag
     flagID: destinationFlagID,
   };
 
-  const isCharge = toNumber(currentItem.categoryID, 0) === 8;
-  if (!isCharge && destinationFlagID >= 11 && destinationFlagID <= 132) {
+  const isModule = toNumber(currentItem.categoryID, 0) === 7;
+  if (isModule) {
     // CCP parity: modules auto-online when fitted to a ship slot.  The client
     // expects fitted modules to be online so that CPU/powergrid load is
-    // reflected correctly in the fitting window.  Charges (categoryID 8)
-    // placed in the same flag as their parent module are NOT modules and
-    // should not receive a moduleState at all.
+    // reflected correctly in the fitting window. Non-module inventory never
+    // carries module state, including charges and Smart Storage Unit contents.
     nextState.moduleState = normalizeModuleState({
       ...(currentItem.moduleState || {}),
-      online: true,
+      online: isFittingFlag(destinationFlagID),
     });
-  } else if (!isCharge) {
-    nextState.moduleState = normalizeModuleState({
-      ...(currentItem.moduleState || {}),
-      online: false,
-    });
+  } else {
+    delete nextState.moduleState;
   }
 
   return nextState;
@@ -3576,15 +3573,15 @@ function stageItemMoveToLocation(
   let movedItemID = numericItemId;
   let remainderItemID = null;
   const movingWholeItem = currentItem.singleton === 1 || moveQuantity === availableQuantity;
+  const fittingDestination =
+    isFittingFlag(destinationFlagID) ||
+    moveOptions.treatDestinationAsFitting === true;
   const movedBase = buildMovedItemState(
     currentItem,
     destinationLocationID,
     destinationFlagID,
   );
 
-  const fittingDestination =
-    isFittingFlag(destinationFlagID) ||
-    moveOptions.treatDestinationAsFitting === true;
   const affectsFitting =
     fittingDestination ||
     isFittingFlag(toNumber(currentItem.flagID, 0)) ||
@@ -3592,9 +3589,9 @@ function stageItemMoveToLocation(
   // CCP parity: only modules (categoryID 7) become singletons when fitted.
   // Charges (categoryID 8) loaded into a module's flag keep their stack
   // quantity — they are NOT singletons.
-  const isChargeCategory = toNumber(currentItem.categoryID, 0) === 8;
+  const isModuleCategory = toNumber(currentItem.categoryID, 0) === 7;
   const convertToSingleton =
-    (fittingDestination && !isChargeCategory) ||
+    (fittingDestination && isModuleCategory) ||
     (
       destinationFlagID === ITEM_FLAGS.STRUCTURE_DEED &&
       toNumber(currentItem.groupID, 0) === STRUCTURE_DEED_GROUP_ID
@@ -3812,6 +3809,84 @@ function moveItemToLocation(
   };
 }
 
+/**
+ * Atomically move several inventory stacks. Every request is staged against a
+ * private snapshot first, then the complete item table is written once. This
+ * is the mutation primitive used by Frontier prepare/execute contracts: a
+ * failed request cannot leave the first half of a multi-stack transaction in
+ * its destination.
+ */
+function moveItemsToLocations(moveRequests) {
+  ensureMigrated();
+  const requests = Array.isArray(moveRequests) ? moveRequests : [];
+  if (requests.length === 0) {
+    return { success: false, errorMsg: "INVALID_MOVE_REQUEST" };
+  }
+
+  const items = cloneValue(readItems());
+  const characters = readCharacters();
+  const moves = [];
+  const changes = [];
+  let affectsFitting = false;
+
+  for (const request of requests) {
+    const requestItemID = Number(request && request.itemID);
+    const destinationLocationID = Number(
+      request && request.destinationLocationID,
+    );
+    const destinationFlagID = Number(request && request.destinationFlagID);
+    const hasQuantity = Boolean(
+      request && Object.prototype.hasOwnProperty.call(request, "quantity"),
+    );
+    const quantity = hasQuantity ? Number(request.quantity) : null;
+    if (
+      !Number.isSafeInteger(requestItemID) ||
+      requestItemID <= 0 ||
+      !Number.isSafeInteger(destinationLocationID) ||
+      destinationLocationID <= 0 ||
+      !Number.isSafeInteger(destinationFlagID) ||
+      destinationFlagID < 0 ||
+      (
+        hasQuantity &&
+        (!Number.isSafeInteger(quantity) || quantity <= 0)
+      )
+    ) {
+      return { success: false, errorMsg: "INVALID_MOVE_REQUEST" };
+    }
+    const stageResult = stageItemMoveToLocation(
+      items,
+      characters,
+      requestItemID,
+      destinationLocationID,
+      destinationFlagID,
+      quantity,
+      request && request.options,
+    );
+    if (!stageResult.success) {
+      return stageResult;
+    }
+    affectsFitting = affectsFitting || stageResult.affectsFitting;
+    moves.push(stageResult.data);
+    changes.push(...stageResult.data.changes);
+  }
+
+  if (affectsFitting) {
+    bumpDogmaInvalidationVersion();
+  }
+  if (!writeItems(items, { indexDelta: indexDeltaFromChanges(changes) })) {
+    return { success: false, errorMsg: "WRITE_ERROR" };
+  }
+
+  notifyInsuranceInventoryMutationChanges(changes, "moveItemsToLocations");
+  return {
+    success: true,
+    data: {
+      changes,
+      moves,
+    },
+  };
+}
+
 function moveItemsAndSetShipPackagingState(
   shipId,
   moveRequests,
@@ -4012,15 +4087,15 @@ function transferItemToOwnerLocation(
   const changes = [];
   const movingWholeItem =
     currentItem.singleton === 1 || moveQuantity === availableQuantity;
+  const fittingDestination = isFittingFlag(destinationFlagID);
   const movedBase = buildMovedItemState(
     currentItem,
     destinationLocationID,
     destinationFlagID,
   );
-  const isChargeCategory = toNumber(currentItem.categoryID, 0) === 8;
-  const fittingDestination = isFittingFlag(destinationFlagID);
+  const isModuleCategory = toNumber(currentItem.categoryID, 0) === 7;
   const convertToSingleton =
-    (fittingDestination && !isChargeCategory) ||
+    (fittingDestination && isModuleCategory) ||
     (
       destinationFlagID === ITEM_FLAGS.STRUCTURE_DEED &&
       toNumber(currentItem.groupID, 0) === STRUCTURE_DEED_GROUP_ID
@@ -4704,6 +4779,7 @@ module.exports = {
   consumeInventoryItemQuantity,
   pruneExpiredSpaceItems,
   moveItemToLocation,
+  moveItemsToLocations,
   moveItemsAndSetShipPackagingState,
   transferItemToOwnerLocation,
   moveItemTypeFromCharacterLocation,

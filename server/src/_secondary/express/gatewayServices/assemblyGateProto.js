@@ -55,6 +55,21 @@ function buildAssemblyGateProtoRoot() {
         .add(new protobuf.Field("dapp_url", 3, "string")),
     );
 
+  const getEnergyConfigResponse = new protobuf.Type("GetEnergyConfigResponse")
+    .add(
+      new protobuf.Type("EnergyEntry")
+        .add(new protobuf.Field("assembly_type", 1, "uint64"))
+        .add(new protobuf.Field("energy_required", 2, "uint64")),
+    )
+    .add(
+      new protobuf.Field(
+        "energy_requirements",
+        1,
+        "eve_public.assembly.api.GetEnergyConfigResponse.EnergyEntry",
+        "repeated",
+      ),
+    );
+
   root.define("eve_public.assembly.api")
     .add(
       new protobuf.Type("GetMetadataRequest").add(
@@ -73,7 +88,9 @@ function buildAssemblyGateProtoRoot() {
           "eve_public.assembly.Metadata",
         ),
       ),
-    );
+    )
+    .add(new protobuf.Type("GetEnergyConfigRequest"))
+    .add(getEnergyConfigResponse);
 
   root.define("eve_public.assembly.gate")
     .add(
@@ -151,6 +168,12 @@ function getAssemblyGateProtoTypes() {
     ),
     getMetadataResponse: root.lookupType(
       "eve_public.assembly.api.GetMetadataResponse",
+    ),
+    getEnergyConfigRequest: root.lookupType(
+      "eve_public.assembly.api.GetEnergyConfigRequest",
+    ),
+    getEnergyConfigResponse: root.lookupType(
+      "eve_public.assembly.api.GetEnergyConfigResponse",
     ),
     getAllOwnedRequest: root.lookupType(
       "eve_public.assembly.gate.api.GetAllOwnedRequest",

@@ -26,6 +26,10 @@ const {
 
 const GET_METADATA_REQUEST = "eve_public.assembly.api.GetMetadataRequest";
 const GET_METADATA_RESPONSE = "eve_public.assembly.api.GetMetadataResponse";
+const GET_ENERGY_CONFIG_REQUEST =
+  "eve_public.assembly.api.GetEnergyConfigRequest";
+const GET_ENERGY_CONFIG_RESPONSE =
+  "eve_public.assembly.api.GetEnergyConfigResponse";
 const GET_ALL_OWNED_REQUEST =
   "eve_public.assembly.gate.api.GetAllOwnedRequest";
 const GET_ALL_OWNED_RESPONSE =
@@ -92,10 +96,17 @@ function createAssemblyGateGatewayService() {
   const types = getAssemblyGateProtoTypes();
   return {
     name: "assembly-gate",
-    handledRequestTypes: [GET_METADATA_REQUEST, GET_ALL_OWNED_REQUEST],
+    handledRequestTypes: [
+      GET_METADATA_REQUEST,
+      GET_ENERGY_CONFIG_REQUEST,
+      GET_ALL_OWNED_REQUEST,
+    ],
     getEmptySuccessResponseType(requestTypeName) {
       if (requestTypeName === GET_METADATA_REQUEST) {
         return GET_METADATA_RESPONSE;
+      }
+      if (requestTypeName === GET_ENERGY_CONFIG_REQUEST) {
+        return GET_ENERGY_CONFIG_RESPONSE;
       }
       return requestTypeName === GET_ALL_OWNED_REQUEST
         ? GET_ALL_OWNED_RESPONSE
@@ -104,6 +115,7 @@ function createAssemblyGateGatewayService() {
     handleRequest(requestTypeName, requestEnvelope) {
       if (
         requestTypeName !== GET_METADATA_REQUEST &&
+        requestTypeName !== GET_ENERGY_CONFIG_REQUEST &&
         requestTypeName !== GET_ALL_OWNED_REQUEST
       ) {
         return null;
@@ -116,8 +128,25 @@ function createAssemblyGateGatewayService() {
           responseTypeName:
             requestTypeName === GET_METADATA_REQUEST
               ? GET_METADATA_RESPONSE
-              : GET_ALL_OWNED_RESPONSE,
+              : requestTypeName === GET_ENERGY_CONFIG_REQUEST
+                ? GET_ENERGY_CONFIG_RESPONSE
+                : GET_ALL_OWNED_RESPONSE,
           responsePayloadBuffer: Buffer.alloc(0),
+        };
+      }
+      if (requestTypeName === GET_ENERGY_CONFIG_REQUEST) {
+        // The extracted build-3455996 client treats missing assembly types as
+        // zero-energy entries. No authoritative energy-balance table is part
+        // of the public descriptor, so return the exact successful wire shape
+        // without inventing values that could incorrectly gate base building.
+        return {
+          statusCode: 200,
+          statusMessage: "",
+          responseTypeName: GET_ENERGY_CONFIG_RESPONSE,
+          responsePayloadBuffer: encodePayload(
+            types.getEnergyConfigResponse,
+            { energy_requirements: [] },
+          ),
         };
       }
       if (requestTypeName === GET_METADATA_REQUEST) {
@@ -165,6 +194,8 @@ function createAssemblyGateGatewayService() {
 }
 
 module.exports = {
+  GET_ENERGY_CONFIG_REQUEST,
+  GET_ENERGY_CONFIG_RESPONSE,
   GET_METADATA_REQUEST,
   GET_METADATA_RESPONSE,
   GET_ALL_OWNED_REQUEST,
