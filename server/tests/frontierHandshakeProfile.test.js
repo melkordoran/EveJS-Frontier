@@ -1503,8 +1503,20 @@ test("Frontier Heavy Gates link reciprocally before signed online", () => {
 
 test("Frontier /create grants items to the active ship cargo while in space", () => {
   const characterID = 140000005;
+  const sourceSystemID = 30000004;
   const ship = getActiveShipRecord(characterID);
   assert.ok(ship && ship.itemID > 0);
+  const originalShip = structuredClone(findItemById(ship.itemID));
+  const repositionResult = updateInventoryItem(ship.itemID, (currentShip) => ({
+    ...currentShip,
+    flagID: 0,
+    locationID: sourceSystemID,
+    spaceState: {
+      ...(currentShip.spaceState || {}),
+      systemID: sourceSystemID,
+    },
+  }));
+  assert.equal(repositionResult.success, true);
 
   const quantityInCargo = () => listContainerItems(
     characterID,
@@ -1523,10 +1535,10 @@ test("Frontier /create grants items to the active ship cargo while in space", ()
   const notifications = [];
   const session = {
     characterID,
-    locationid: ship.locationID,
+    locationid: sourceSystemID,
     shipid: ship.itemID,
-    solarsystemid: ship.locationID,
-    solarsystemid2: ship.locationID,
+    solarsystemid: sourceSystemID,
+    solarsystemid2: sourceSystemID,
     stationid: null,
     structureid: null,
     sendNotification(...args) {
@@ -1534,22 +1546,26 @@ test("Frontier /create grants items to the active ship cargo while in space", ()
     },
   };
 
-  const result = executeChatCommand(
-    session,
-    "/create 34 7",
-    null,
-    { emitChatFeedback: false },
-  );
+  try {
+    const result = executeChatCommand(
+      session,
+      "/create 34 7",
+      null,
+      { emitChatFeedback: false },
+    );
 
-  assert.equal(result.handled, true);
-  assert.equal(Number.isInteger(result.message), true);
-  assert.equal(quantityInCargo(), beforeQuantity + 7);
-  assert.equal(findItemById(result.message).locationID, ship.itemID);
-  assert.equal(findItemById(result.message).flagID, ITEM_FLAGS.CARGO_HOLD);
-  assert.equal(
-    notifications.some(([eventName]) => eventName === "OnItemChange"),
-    true,
-  );
+    assert.equal(result.handled, true);
+    assert.equal(Number.isInteger(result.message), true);
+    assert.equal(quantityInCargo(), beforeQuantity + 7);
+    assert.equal(findItemById(result.message).locationID, ship.itemID);
+    assert.equal(findItemById(result.message).flagID, ITEM_FLAGS.CARGO_HOLD);
+    assert.equal(
+      notifications.some(([eventName]) => eventName === "OnItemChange"),
+      true,
+    );
+  } finally {
+    updateInventoryItem(ship.itemID, () => originalShip);
+  }
 });
 
 test("Frontier construction-site crdata omits completed-assembly activation fields", () => {
