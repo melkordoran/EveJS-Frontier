@@ -1298,11 +1298,12 @@ test("Frontier chain assemblies commit a one-use signed state transition", () =>
   }
 });
 
-test("Frontier Heavy Gates link reciprocally before signed online", () => {
-  const characterID = 140000005;
+test("Frontier Heavy Gates stay owner-managed while allowing visitor traversal", () => {
+  const visitorCharacterID = 140000005;
+  const gateOwnerID = 140000006;
   const sourceSystemID = 30000004;
   const destinationSystemID = 30000005;
-  const activeShip = getActiveShipRecord(characterID);
+  const activeShip = getActiveShipRecord(visitorCharacterID);
   assert.ok(activeShip && activeShip.itemID > 0);
   const originalShip = structuredClone(findItemById(activeShip.itemID));
   const repositionResult = updateInventoryItem(activeShip.itemID, (ship) => ({
@@ -1318,7 +1319,7 @@ test("Frontier Heavy Gates link reciprocally before signed online", () => {
   const nowMs = Date.now();
   const gateMetadata = getItemMetadata(84955);
   const createGate = (solarSystemID, x) => createSpaceItemForCharacter(
-    characterID,
+    gateOwnerID,
     solarSystemID,
     gateMetadata,
     {
@@ -1332,7 +1333,7 @@ test("Frontier Heavy Gates link reciprocally before signed online", () => {
         createdAtMs: nowMs,
         destinationGateID: 0,
         durationSeconds: 51840,
-        ownerID: characterID,
+        ownerID: gateOwnerID,
         solarSystemID,
         targetSolarSystemID: 0,
       }),
@@ -1346,29 +1347,36 @@ test("Frontier Heavy Gates link reciprocally before signed online", () => {
   assert.equal(destinationResult.success, true);
   const sourceGateID = sourceResult.data.itemID;
   const destinationGateID = destinationResult.data.itemID;
-  const session = {
-    characterID,
+  const ownerSession = {
+    characterID: gateOwnerID,
     locationid: sourceSystemID,
     solarsystemid: sourceSystemID,
     solarsystemid2: sourceSystemID,
     sendNotification() {},
   };
+  const visitorSession = {
+    ...ownerSession,
+    characterID: visitorCharacterID,
+  };
   const signatureEnvelope = Buffer.alloc(97, 1).toString("base64");
 
   try {
     const service = new SmartAssemblyService();
-    assert.equal(service.Handle_on_interaction([sourceGateID], session), null);
+    assert.equal(
+      service.Handle_on_interaction([sourceGateID], visitorSession),
+      null,
+    );
 
     const preparedLink = Object.fromEntries(
       service.Handle_link_gates(
         [sourceGateID, destinationGateID],
-        session,
+        ownerSession,
       ).entries,
     );
     assert.equal(
       service.Handle_link_gates_signature(
         [sourceGateID, preparedLink.transaction_uuid, signatureEnvelope],
-        session,
+        ownerSession,
       ),
       true,
     );
@@ -1388,7 +1396,7 @@ test("Frontier Heavy Gates link reciprocally before signed online", () => {
       GET_ALL_OWNED_REQUEST,
       {
         authoritative_context: {
-          active_character: { sequential: characterID },
+          active_character: { sequential: gateOwnerID },
         },
       },
     );
@@ -1407,14 +1415,32 @@ test("Frontier Heavy Gates link reciprocally before signed online", () => {
       Number(sourceEntry.attributes.destination.sequential),
       destinationGateID,
     );
+    const visitorGatewayResult = createAssemblyGateGatewayService().handleRequest(
+      GET_ALL_OWNED_REQUEST,
+      {
+        authoritative_context: {
+          active_character: { sequential: visitorCharacterID },
+        },
+      },
+    );
+    const visitorGatewayResponse = getAssemblyGateProtoTypes()
+      .getAllOwnedResponse.decode(visitorGatewayResult.responsePayloadBuffer);
+    assert.equal(visitorGatewayResult.statusCode, 200);
+    assert.equal(
+      visitorGatewayResponse.gates.some((entry) => (
+        Number(entry.id.sequential) === sourceGateID ||
+        Number(entry.id.sequential) === destinationGateID
+      )),
+      false,
+    );
 
     const preparedOnline = Object.fromEntries(
-      service.Handle_set_online([sourceGateID], session).entries,
+      service.Handle_set_online([sourceGateID], ownerSession).entries,
     );
     assert.equal(
       service.Handle_set_online_signature(
         [sourceGateID, preparedOnline.transaction_uuid, signatureEnvelope],
-        session,
+        ownerSession,
       ),
       true,
     );
@@ -1425,7 +1451,7 @@ test("Frontier Heavy Gates link reciprocally before signed online", () => {
     );
 
     assert.throws(
-      () => service.Handle_gate_jump([sourceGateID], session),
+      () => service.Handle_gate_jump([sourceGateID], ownerSession),
       (error) => {
         assert.equal(error && error.name, "MachoWrappedException");
         assert.match(
@@ -1437,7 +1463,7 @@ test("Frontier Heavy Gates link reciprocally before signed online", () => {
     );
 
     const destinationSession = {
-      ...session,
+      ...ownerSession,
       locationid: destinationSystemID,
       solarsystemid: destinationSystemID,
       solarsystemid2: destinationSystemID,
@@ -1457,8 +1483,31 @@ test("Frontier Heavy Gates link reciprocally before signed online", () => {
       true,
     );
 
+    assert.throws(
+      () => service.Handle_set_offline([sourceGateID], visitorSession),
+      (error) => {
+        assert.equal(error && error.name, "MachoWrappedException");
+        assert.match(
+          JSON.stringify(error && error.machoErrorResponse),
+          /do not own this assembly/u,
+        );
+        return true;
+      },
+    );
+    assert.throws(
+      () => service.Handle_unlink_gate([sourceGateID], visitorSession),
+      (error) => {
+        assert.equal(error && error.name, "MachoWrappedException");
+        assert.match(
+          JSON.stringify(error && error.machoErrorResponse),
+          /do not own this assembly/u,
+        );
+        return true;
+      },
+    );
+
     const preparedJump = Object.fromEntries(
-      service.Handle_gate_jump([sourceGateID], session).entries,
+      service.Handle_gate_jump([sourceGateID], visitorSession).entries,
     );
     const transitions = require("../src/space/transitions");
     const originalJumpSessionToSolarSystem = transitions.jumpSessionToSolarSystem;
@@ -1472,17 +1521,31 @@ test("Frontier Heavy Gates link reciprocally before signed online", () => {
       return { success: true, data: { solarSystemID } };
     };
     try {
+      assert.throws(
+        () => service.Handle_gate_jump_signature(
+          [sourceGateID, preparedJump.transaction_uuid, signatureEnvelope],
+          { ...visitorSession, characterID: gateOwnerID },
+        ),
+        (error) => {
+          assert.equal(error && error.name, "MachoWrappedException");
+          assert.match(
+            JSON.stringify(error && error.machoErrorResponse),
+            /transaction no longer matches/u,
+          );
+          return true;
+        },
+      );
       assert.equal(
         service.Handle_gate_jump_signature(
           [sourceGateID, preparedJump.transaction_uuid, signatureEnvelope],
-          session,
+          visitorSession,
         ),
         true,
       );
     } finally {
       transitions.jumpSessionToSolarSystem = originalJumpSessionToSolarSystem;
     }
-    assert.equal(capturedJump.jumpSession, session);
+    assert.equal(capturedJump.jumpSession, visitorSession);
     assert.equal(capturedJump.solarSystemID, destinationSystemID);
     assert.equal(capturedJump.options.stargateJumpCloak, true);
     assert.equal(
@@ -1493,6 +1556,8 @@ test("Frontier Heavy Gates link reciprocally before signed online", () => {
       capturedJump.options.spawnStateOverride.anchorType,
       "frontierSmartGate",
     );
+    assert.equal(findItemById(sourceGateID).ownerID, gateOwnerID);
+    assert.equal(findItemById(destinationGateID).ownerID, gateOwnerID);
   } finally {
     deploymentContractTesting.clearPendingAssemblyTransitions();
     removeInventoryItem(sourceGateID, { removeContents: true });
