@@ -6,7 +6,7 @@
     "frontier:validate": "node tools/frontier-static/validate-frontier-static.mjs",
     "test:frontier-static": "node --test tools/frontier-static/test/*.test.mjs",
     "test:isolated": "node scripts/Tests/run-isolated-tests.js",
-    "test:frontier-server": "EVEJS_TEST_STORE_BASELINE_ROOT=_local/frontier-runtime/3455996/gameStore EVEJS_STATIC_JSONL_ROOT=_local/frontier-sde/3455996 EVEJS_CLIENT_BUILD=3455996 node scripts/Tests/run-isolated-tests.js --test-concurrency=1 server/tests/frontierHandshakeProfile.test.js server/tests/frontierLoadFuel.test.js server/tests/frontierWarpAlign.test.js server/tests/frontierNetworkNodeFuel.test.js server/tests/frontierCreationAbilities.test.js server/tests/frontierExperienceService.test.js server/tests/frontierAssemblyEnergyConfig.test.js server/tests/frontierMapSkinCompatibility.test.js server/tests/frontierSmartStorageUnit.test.js"
+    "test:frontier-server": "EVEJS_TEST_STORE_BASELINE_ROOT=_local/frontier-runtime/3463382/gameStore EVEJS_STATIC_JSONL_ROOT=_local/frontier-sde/3463382 EVEJS_CLIENT_BUILD=3463382 node scripts/Tests/run-isolated-tests.js --test-concurrency=1 server/tests/frontierHandshakeProfile.test.js server/tests/frontierLoadFuel.test.js server/tests/frontierWarpAlign.test.js server/tests/frontierNetworkNodeFuel.test.js server/tests/frontierCreationAbilities.test.js server/tests/frontierExperienceService.test.js server/tests/frontierAssemblyEnergyConfig.test.js server/tests/frontierMapSkinCompatibility.test.js server/tests/frontierSmartStorageUnit.test.js"
   },
   "dependencies": {
     "node-forge": "^1.3.1",
