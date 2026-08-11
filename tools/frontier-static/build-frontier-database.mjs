@@ -187,7 +187,7 @@ function validateDatabase(dataDir, snapshotManifest, databaseManifest) {
   }
 
   const clientBuild = Number(snapshotManifest.source.client.build);
-  if (new Set([3450341, 3455996, 3463382]).has(clientBuild)) {
+  if (new Set([3450341, 3455996, 3463382, 3465410]).has(clientBuild)) {
     const riftF935 = frontierDungeonTemplates.find(
       (dungeon) => Number(dungeon.dungeonID) === 14001,
     );

@@ -7,16 +7,82 @@ Join the project Discord: [https://discord.gg/KMuJrMDEBa](https://discord.gg/KMu
 ## EVE Frontier compatibility fork
 
 This checkout contains an experimental, isolated compatibility profile for EVE
-Frontier build `3463382`. It extracts static data only from the locally
+Frontier build `3465410`. It extracts static data only from the locally
 installed client, stages a separate client copy, and leaves the retail client
 and normal EveJS installation untouched.
 
-Milestone two reaches Frontier character creation, returning-character
-selection, and the initial docked UI on game TCP port `26000`. Setup,
-verification results, and the next compatibility boundary are in
-[the milestone-two record](doc/FRONTIER_MILESTONE_2.md). The
-[milestone-one record](doc/FRONTIER_MILESTONE_1.md) remains the authenticated
-handshake baseline.
+The current profile reaches character creation and selection, rendered space,
+native flight and warp, modular Creation fitting, local XMPP, deployables,
+Refuge berthing, Heavy Gate travel, and Smart Storage. See
+[milestone three](doc/FRONTIER_MILESTONE_3.md) for the implemented surface and
+known limits. [Milestone one](doc/FRONTIER_MILESTONE_1.md) and
+[milestone two](doc/FRONTIER_MILESTONE_2.md) preserve the original handshake
+and character-selection history.
+
+### Frontier macOS quickstart
+
+The Frontier profile is a native macOS development workflow. Run the server
+and client on the same Mac and keep every listener on `127.0.0.1`.
+
+Requirements:
+
+- an installed EVE Frontier client whose build has an exact
+  `tools/frontier-client/blue-so.<build>.patch.json` profile;
+- Node.js, npm, OpenSSL, and Python 3.12;
+- macOS `ditto`, `xattr`, `codesign`, and `security` tools.
+
+From the repository root, extract and validate the installed build, then create
+the generated database. These outputs are build-numbered and ignored by Git:
+
+```bash
+BUILD=3465410
+npm ci
+npm run frontier:extract -- --build "$BUILD"
+npm run frontier:validate -- --snapshot "_local/frontier-sde/$BUILD"
+npm run frontier:database -- --snapshot "_local/frontier-sde/$BUILD"
+npm run frontier:contracts -- --build "$BUILD"
+npm run test:frontier-static
+```
+
+Start the server in the first terminal. Initial startup creates an isolated
+runtime and the local CA used by the staged client:
+
+```bash
+bash StartFrontierServer.sh --build "$BUILD"
+```
+
+Leave it running. In a second terminal, create and verify the isolated client
+copy. The retail app is not patched; only its large `ResFiles` directory is
+linked into the stage and left unmodified:
+
+```bash
+bash StageFrontierClient.sh --build "$BUILD"
+bash PatchFrontierClientTrust.sh \
+  --staged-root "$HOME/Library/Application Support/evejs-frontier/macos/staged-client/current" \
+  --check
+npm run test:frontier-server
+```
+
+Launch only through the project script so the staged resource cache, secure
+local public gateway, settings profile, and Placebo crypto mode are applied:
+
+```bash
+bash PlayFrontier.sh --server-host 127.0.0.1 --foreground
+```
+
+If the official launcher session is required, capture it without printing its
+tokens, then opt into replay:
+
+```bash
+bash CaptureFrontierSession.sh --open-launcher
+bash PlayFrontier.sh --use-captured-session --foreground
+```
+
+For daily use, start `StartFrontierServer.sh` first and `PlayFrontier.sh`
+second. Do not launch `exefile` directly, expose the local ports to a LAN, use
+an older binary patch profile on a newer build, or pass `--reset-runtime`
+unless discarding the isolated world is intentional. Client updates require a
+new exact-build patch profile and a new build-numbered static snapshot.
 
 ## Localhost only
 

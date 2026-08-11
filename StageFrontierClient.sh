@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BUILD="3463382"
+BUILD="3465410"
 SOURCE_ROOT="${HOME}/Library/Application Support/EVE Frontier"
 STAGED_BASE="${HOME}/Library/Application Support/evejs-frontier/macos/staged-client"
 CLEAN=false
@@ -17,7 +17,7 @@ Creates an isolated staged copy of the installed EVE Frontier client. The
 retail client and shared ResFiles cache are never modified.
 
 Options:
-  --build <number>       Installed Frontier build. Default: 3463382
+  --build <number>       Installed Frontier build. Default: 3465410
   --source-root <path>   Frontier launcher data root
   --staged-base <path>   Build-numbered staging base
   --clean                Replace this build's existing staged copy
