@@ -1,5 +1,10 @@
 # EVE Frontier Compatibility: Milestone One
 
+> [!NOTE]
+> This is the historical build-`3450341` handshake baseline. See
+> [milestone three](FRONTIER_MILESTONE_3.md) for the current playable
+> compatibility profile, supported build workflow, and remaining limits.
+
 This experimental fork establishes a reproducible, isolated baseline for
 connecting the installed EVE Frontier client to EveJS. It uses static data
 extracted from Phillip's locally installed client and does not copy proprietary

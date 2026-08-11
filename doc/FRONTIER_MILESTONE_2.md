@@ -1,5 +1,10 @@
 # EVE Frontier Compatibility: Milestone Two
 
+> [!NOTE]
+> This is the historical build-`3450341` character-selection milestone. Its
+> post-selection boundaries are addressed by the later work summarized in
+> [milestone three](FRONTIER_MILESTONE_3.md).
+
 Milestone two carries the isolated EVE Frontier build `3450341` session from
 the authenticated MachoNet handshake through character creation and character
 selection. It builds on the reproducible client/static-data baseline described
