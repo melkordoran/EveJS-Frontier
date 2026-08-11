@@ -292,6 +292,9 @@ function readCreationState(item) {
 function filterCreationModuleInventoryItems(item, inventoryItems = []) {
   const items = Array.isArray(inventoryItems) ? inventoryItems : [];
   const state = readCreationState(item);
+  if (!state || !Array.isArray(state.modules)) {
+    return items;
+  }
   const activeModuleItemIDs = new Set(
     state.modules
       .map((module) => toInt(module && module.itemID, 0))
@@ -464,15 +467,28 @@ function reconcileCreationModuleFittingFlags(item, characterID, state) {
 }
 
 function ensureCreationState(item, characterID) {
-  const template = getCreationTemplate(item && item.typeID);
+  const canonicalItem =
+    findItemById(toInt(item && item.itemID, 0)) || item;
+  const ownerID = toInt(characterID, 0);
+  if (
+    !canonicalItem ||
+    ownerID <= 0 ||
+    toInt(canonicalItem.ownerID, 0) !== ownerID
+  ) {
+    return { success: false, errorMsg: "CREATION_ITEM_NOT_OWNED" };
+  }
+  const template = getCreationTemplate(canonicalItem && canonicalItem.typeID);
   if (!template) {
     return { success: false, errorMsg: "CREATION_TEMPLATE_NOT_FOUND" };
   }
 
-  const existing = readCreationState(item);
-  if (existing && existing.templateTypeID === toInt(item.typeID, 0)) {
+  const existing = readCreationState(canonicalItem);
+  if (
+    existing &&
+    existing.templateTypeID === toInt(canonicalItem.typeID, 0)
+  ) {
     const reconciliation = reconcileCreationModuleFittingFlags(
-      item,
+      canonicalItem,
       characterID,
       existing,
     );
@@ -482,7 +498,7 @@ function ensureCreationState(item, characterID) {
     return {
       success: true,
       data: {
-        item,
+        item: canonicalItem,
         state: existing,
         template,
         seeded: false,
@@ -494,7 +510,7 @@ function ensureCreationState(item, characterID) {
   const plan = buildCreationSeedPlan(template);
   const grantResult = grantItemsToCharacterLocation(
     characterID,
-    item.itemID,
+    canonicalItem.itemID,
     HIDDEN_CREATION_MODULE_FLAG_ID,
     plan.map((entry) => ({
       itemType: entry.typeID,
@@ -516,11 +532,11 @@ function ensureCreationState(item, characterID) {
 
   const state = buildSeededCreationState(
     template,
-    item.itemID,
+    canonicalItem.itemID,
     plan,
     createdItems,
   );
-  const updateResult = updateShipItem(item.itemID, (currentItem) => ({
+  const updateResult = updateShipItem(canonicalItem.itemID, (currentItem) => ({
     ...currentItem,
     customInfo: customInfoWithCreationState(currentItem, state),
   }));

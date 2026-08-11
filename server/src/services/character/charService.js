@@ -22,6 +22,7 @@ const {
   applyCharacterToSession,
   flushCharacterSessionNotificationPlan,
   getCharacterRecord,
+  removeCharacterRecord,
   updateCharacterRecord,
 } = require("./characterState");
 const {
@@ -68,6 +69,13 @@ const {
 const {
   spawnRookieShipForCharacter,
 } = require("../ship/rookieShipRuntime");
+const {
+  ensureCreationState,
+} = require("../frontier/creationRuntime");
+const {
+  listCharacterItems,
+  removeInventoryItem,
+} = require("../inventory/itemStore");
 const {
   broadcastStationGuestJoined,
   broadcastStructureGuestJoined,
@@ -117,6 +125,8 @@ const CHARACTER_CREATION_VALIDATION_SESSION_KEY =
   "_characterCreationValidationEnabled";
 const CHARACTER_CREATION_VALIDATION_ROLE_MASK =
   ROLE_CONTENT | ROLE_QA | ROLE_PROGRAMMER | ROLE_GML;
+const FRONTIER_STARTER_SHIP_TYPE_ID = 95276;
+const FRONTIER_STARTER_SHIP_NAME = "Creation";
 
 /**
  * Build a util.KeyVal PyObject — the only working PyObject type in V23.02
@@ -470,6 +480,39 @@ function resolveFrontierStarterLocationContext(groupID) {
 function normalizeAccountID(value) {
   const numeric = Number(value);
   return Number.isSafeInteger(numeric) && numeric > 0 ? numeric : 0;
+}
+
+function rollbackNewCharacterBootstrap(characterID) {
+  const numericCharacterID = Number(characterID) || 0;
+  const ownedItems = listCharacterItems(numericCharacterID);
+  const ownedItemIDs = new Set(
+    ownedItems.map((item) => Number(item && item.itemID) || 0),
+  );
+  const rootItems = ownedItems.filter(
+    (item) => !ownedItemIDs.has(Number(item && item.locationID) || 0),
+  );
+  const removalTargets = rootItems.length > 0 ? rootItems : ownedItems;
+  let itemsRemoved = true;
+  for (const item of removalTargets) {
+    const result = removeInventoryItem(item.itemID, { removeContents: true });
+    itemsRemoved = Boolean(result && result.success) && itemsRemoved;
+  }
+  for (const item of listCharacterItems(numericCharacterID)) {
+    const result = removeInventoryItem(item.itemID, { removeContents: true });
+    itemsRemoved = Boolean(result && result.success) && itemsRemoved;
+  }
+
+  const characterRemoval = removeCharacterRecord(numericCharacterID);
+  const flushResult = repo.flushTablesSync(["characters", "items"]);
+  return {
+    success:
+      itemsRemoved &&
+      characterRemoval.success === true &&
+      flushResult.success === true,
+    itemsRemoved,
+    characterRemoved: characterRemoval.success === true,
+    flushed: flushResult.success === true,
+  };
 }
 
 function characterBelongsToAccount(character, accountID) {
@@ -958,9 +1001,18 @@ class CharService extends BaseService {
       11,
     );
     const raceProfile = getCharacterCreationRace(bloodlineProfile.raceID) || null;
-    const starterShipTypeID = Number((raceProfile && raceProfile.shipTypeID) || 606) || 606;
+    const explicitStarterShipTypeID =
+      Number(creationOptions.starterShipTypeID) || 0;
+    const starterShipTypeID =
+      explicitStarterShipTypeID ||
+      Number((raceProfile && raceProfile.shipTypeID) || 606) ||
+      606;
     const starterShipName =
-      (raceProfile && raceProfile.shipName) || "Velator";
+      String(
+        creationOptions.starterShipName ||
+          (raceProfile && raceProfile.shipName) ||
+          "Velator",
+      ).trim() || "Velator";
     const starterLocation =
       creationOptions.starterLocation ||
       resolveStarterLocationContext(bloodlineProfile, resolvedSchoolID);
@@ -1099,6 +1151,9 @@ class CharService extends BaseService {
       characters[String(newCharId)].stationID,
       {
         characterRecord: characters[String(newCharId)],
+        shipTypeID: starterShipTypeID,
+        shipName: starterShipName,
+        preferExplicitShipType: explicitStarterShipTypeID > 0,
         setActiveShip: true,
         logLabel: "CreateCharacterWithDoll",
       },
@@ -1107,6 +1162,36 @@ class CharService extends BaseService {
       log.warn(
         `[CharService] CreateCharacterWithDoll failed to provision rookie ship for char=${newCharId} typeID=${starterShipTypeID} error=${rookieShipResult.errorMsg}`,
       );
+      if (creationOptions.initializeCreation === true) {
+        const rollback = rollbackNewCharacterBootstrap(newCharId);
+        log.warn(
+          `[CharService] Rolled back failed Frontier character bootstrap char=${newCharId} success=${rollback.success}`,
+        );
+        throwWrappedUserError("CustomInfo", {
+          info: "The starter Creation could not be initialized. Please try again.",
+        });
+      }
+    } else if (
+      creationOptions.initializeCreation === true &&
+      rookieShipResult.data &&
+      rookieShipResult.data.ship
+    ) {
+      const creationResult = ensureCreationState(
+        rookieShipResult.data.ship,
+        newCharId,
+      );
+      if (!creationResult.success) {
+        log.warn(
+          `[CharService] CreateCharacterWithDoll failed to initialize Creation ship=${rookieShipResult.data.ship.itemID} char=${newCharId} error=${creationResult.errorMsg}`,
+        );
+        const rollback = rollbackNewCharacterBootstrap(newCharId);
+        log.warn(
+          `[CharService] Rolled back failed Frontier character bootstrap char=${newCharId} success=${rollback.success}`,
+        );
+        throwWrappedUserError("CustomInfo", {
+          info: "The starter Creation could not be initialized. Please try again.",
+        });
+      }
     }
     const welcomeMailResult = sendWelcomeMailToCharacter(newCharId, {
       characterName:
@@ -1155,7 +1240,12 @@ class CharService extends BaseService {
       [characterName, 1, 1, 1, null, null, 0],
       session,
       null,
-      { starterLocation },
+      {
+        starterLocation,
+        starterShipTypeID: FRONTIER_STARTER_SHIP_TYPE_ID,
+        starterShipName: FRONTIER_STARTER_SHIP_NAME,
+        initializeCreation: true,
+      },
     );
   }
 
@@ -1571,6 +1661,8 @@ class CharService extends BaseService {
 
 CharService._testing = {
   CHARACTER_CREATION_VALIDATION_SESSION_KEY,
+  FRONTIER_STARTER_SHIP_NAME,
+  FRONTIER_STARTER_SHIP_TYPE_ID,
   canToggleCharacterCreationValidation,
   getCharacterCreationValidationEnabled,
   evictPriorSession,

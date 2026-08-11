@@ -677,6 +677,39 @@ function validateOwnedSmartGateForCharacter(characterID, itemID) {
   return { success: true, characterID, definition, item, state };
 }
 
+function validateSmartGate(itemID) {
+  const item = itemStore.findItemById(itemID);
+  const state = readConstructionState(item);
+  if (!item || !state) {
+    return { success: false, errorMsg: "ASSEMBLY_NOT_FOUND" };
+  }
+  if (state.assemblyStatus === ASSEMBLY_STATUS_UNDER_CONSTRUCTION) {
+    return { success: false, errorMsg: "ASSEMBLY_UNDER_CONSTRUCTION" };
+  }
+  const definition = getBuildDefinition(state.assemblyTypeID);
+  if (!isSmartGateDefinition(definition)) {
+    return { success: false, errorMsg: "ASSEMBLY_NOT_SMART_GATE" };
+  }
+  return { success: true, definition, item, state };
+}
+
+// Build 3463382 exposes ownership only on gate-management controls. An online,
+// reciprocal Heavy Gate pair is intentionally traversable by other pilots.
+function validateSmartGateForTraversal(session, itemID) {
+  const characterID = getCharacterID(session);
+  if (characterID <= 0) {
+    return { success: false, errorMsg: "ASSEMBLY_ACCESS_DENIED" };
+  }
+  const validation = validateSmartGate(itemID);
+  if (!validation.success) {
+    return validation;
+  }
+  if (getSolarSystemID(session) !== validation.state.solarSystemID) {
+    return { success: false, errorMsg: "ASSEMBLY_NOT_IN_CURRENT_SYSTEM" };
+  }
+  return { ...validation, characterID };
+}
+
 function validateOwnedSmartGate(session, itemID) {
   const characterID = getCharacterID(session);
   const validation = validateOwnedSmartGateForCharacter(characterID, itemID);
@@ -1119,7 +1152,7 @@ function commitGateLinkTransition(
 }
 
 function validateGateJump(session, gateID) {
-  const source = validateOwnedSmartGate(session, gateID);
+  const source = validateSmartGateForTraversal(session, gateID);
   if (!source.success) {
     return source;
   }
@@ -1133,14 +1166,13 @@ function validateGateJump(session, gateID) {
     return { success: false, errorMsg: "SMART_GATE_NOT_LINKED" };
   }
 
-  const destination = validateOwnedSmartGateForCharacter(
-    source.characterID,
-    source.state.destinationGateID,
-  );
+  const destination = validateSmartGate(source.state.destinationGateID);
   if (!destination.success) {
     return destination;
   }
   if (
+    toInt(source.item.ownerID, 0) <= 0 ||
+    toInt(destination.item.ownerID, 0) !== toInt(source.item.ownerID, 0) ||
     source.state.targetSolarSystemID !== destination.state.solarSystemID ||
     destination.state.destinationGateID !== source.item.itemID ||
     destination.state.targetSolarSystemID !== source.state.solarSystemID
