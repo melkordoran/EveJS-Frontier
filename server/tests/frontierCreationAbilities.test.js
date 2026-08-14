@@ -19,11 +19,14 @@ const {
 } = require("../src/services/frontier/creationStaticData");
 const iffRuntime = require("../src/services/frontier/iffRuntime");
 const scanningRuntime = require("../src/services/frontier/scanningRuntime");
+const ScanningService = require("../src/services/frontier/scanningService");
+const MachoNetService = require("../src/services/machoNet/machoNetService");
 const itemStore = require("../src/services/inventory/itemStore");
 const liveFittingState = require("../src/services/fitting/liveFittingState");
 const frontierSpaceRuntime = require("../src/space/runtime");
 const DogmaService = require("../src/services/dogma/dogmaService");
 const {
+  buildPythonTimedeltaPayload,
   buildScanResponse,
   millisecondsToFiletimeDelta,
 } = require("../src/services/frontier/scanningAbilityHandlers");
@@ -1024,7 +1027,7 @@ test("empty scans and empty beacon lists marshal under the frontier profile", ()
   frontierMarshals(buildScanResponse(populatedScan));
 });
 
-test("scan response uses attribute-style KeyVal with filetime deltas", () => {
+test("scan response uses KeyVal, timedelta duration, and resolved filetime deltas", () => {
   const scan = runScan([
     { itemID: 8001, typeID: TYPE_SIGNATURE_TARGET, position: { x: 0, y: 0, z: 100000 } },
   ]);
@@ -1042,9 +1045,16 @@ test("scan response uses attribute-style KeyVal with filetime deltas", () => {
   assert.ok(entries.has("updated_scans"));
   assert.ok(entries.has("resolved"));
 
-  // duration is a filetime delta (100ns units), not milliseconds.
-  assert.equal(typeof entries.get("duration"), "bigint");
-  assert.equal(entries.get("duration"), millisecondsToFiletimeDelta(scan.durationMs));
+  // Python 3.12 passes response.duration directly into ScanPulsePhase, where
+  // it is added to a datetime. This golden protocol-2 pickle must therefore
+  // reconstruct datetime.timedelta(0, 6, 0), not a tick integer.
+  const duration = entries.get("duration");
+  assert.equal(duration.type, "cpicked");
+  assert.equal(
+    duration.data.toString("hex"),
+    "8002636461746574696d650a74696d6564656c74610a71004b004b064b008771015271022e",
+  );
+  assert.deepEqual(duration, buildPythonTimedeltaPayload(scan.durationMs));
   assert.equal(millisecondsToFiletimeDelta(6000), 60000000n);
 
   // resolved values are filetime deltas keyed by ball id.
@@ -1064,4 +1074,132 @@ test("scan duration and signature multipliers come from authored dogma", () => {
   for (const [, multiplier] of multipliers) {
     assert.equal(multiplier, 500);
   }
+});
+
+test("build 3467658 module-less scanningService uses the authored scanner profile and exact response", () => {
+  const ship = {
+    kind: "ship",
+    itemID: SHIP_ID,
+    typeID: 95276,
+    position: { x: 10, y: 20, z: 30 },
+  };
+  const target = {
+    kind: "deployable",
+    itemID: 8101,
+    typeID: TYPE_SIGNATURE_TARGET,
+    position: { x: 10, y: 20, z: 100030 },
+  };
+  let captured = null;
+  const service = new ScanningService({
+    spaceRuntime: {
+      getEntity(_session, itemID) {
+        return Number(itemID) === SHIP_ID ? ship : null;
+      },
+      getSceneForSession() {
+        return {
+          getDynamicEntities() {
+            return [ship, target, null];
+          },
+        };
+      },
+    },
+    performDirectionalScan(options) {
+      captured = options;
+      return {
+        origin: [10, 20, 30],
+        durationMs: 6000,
+        added: [8101],
+        removed: [7999],
+        updatedScans: [{
+          center: [10, 20, 100030],
+          radius: 1000,
+          scan_id: 8101,
+          distance_range: [100000, 100000],
+          estimated_number: 1,
+          estimated_number_uncertainty: 0,
+          signature_results: [[1, 1, 0.001]],
+        }],
+        resolvedIds: [8101],
+        scanIds: [8101],
+      };
+    },
+  });
+  const session = {
+    shipid: SHIP_ID,
+    _space: {
+      shipID: SHIP_ID,
+      frontierDirectionalScanIds: [7999],
+    },
+  };
+
+  const response = service.Handle_directional_scan([], session, {
+    type: "dict",
+    entries: [
+      ["scan_angle", 15],
+      ["scan_direction", { type: "list", items: [0, 0, 1] }],
+    ],
+  });
+
+  assert.equal(service.name, "scanningService");
+  assert.equal(captured.moduleTypeID, 95322);
+  assert.deepEqual(captured.originPosition, ship.position);
+  assert.deepEqual(captured.direction, { x: 0, y: 0, z: 1 });
+  assert.deepEqual(captured.previousScanIds, [7999]);
+  assert.deepEqual(captured.candidates, [{
+    itemID: 8101,
+    typeID: TYPE_SIGNATURE_TARGET,
+    position: target.position,
+  }]);
+  assert.deepEqual(session._space.frontierDirectionalScanIds, [8101]);
+  assert.equal(response.type, "object");
+  assert.equal(response.name, "util.KeyVal");
+  const entries = new Map(response.args.entries);
+  assert.deepEqual(entries.get("duration"), buildPythonTimedeltaPayload(6000));
+  assert.deepEqual(entries.get("resolved"), {
+    type: "dict",
+    entries: [[8101, 60000000n]],
+  });
+  frontierMarshals(response);
+});
+
+test("MachoNet advertises the build 3467658 module-less scanning service", () => {
+  const serviceInfo = new Map(new MachoNetService().getServiceInfoDict().entries);
+  assert.equal(serviceInfo.has("scanningService"), true);
+  assert.equal(serviceInfo.get("scanningService"), null);
+});
+
+test("module-less scanningService rejects malformed or docked requests as UserError", () => {
+  const service = new ScanningService({
+    spaceRuntime: {
+      getEntity() {
+        return null;
+      },
+      getSceneForSession() {
+        return null;
+      },
+    },
+  });
+  const isWrappedUserError = (error) => Boolean(
+    error &&
+    error.machoErrorResponse &&
+    error.machoErrorResponse.payload &&
+    error.machoErrorResponse.payload.header &&
+    error.machoErrorResponse.payload.header[0] &&
+    error.machoErrorResponse.payload.header[0].value === "eveexceptions.UserError"
+  );
+
+  assert.throws(
+    () => service.Handle_directional_scan([], { _space: { shipID: SHIP_ID } }, {
+      scan_angle: 90,
+      scan_direction: [0, 0, 1],
+    }),
+    isWrappedUserError,
+  );
+  assert.throws(
+    () => service.Handle_directional_scan([], { shipid: SHIP_ID }, {
+      scan_angle: 15,
+      scan_direction: [0, 0, 1],
+    }),
+    isWrappedUserError,
+  );
 });

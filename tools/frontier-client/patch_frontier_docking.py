@@ -16,7 +16,7 @@ import zipfile
 
 
 MODULE_NAME = "menucheckers/celestialCheckers.pyc"
-DEFAULT_CLIENT_BUILD = 3465410
+DEFAULT_CLIENT_BUILD = 3467658
 BUILD_PROFILES = {
     3450341: {
         "source_member_sha256": "cbdd5ede870cc365456144fe1ddade1994f4c01ece2f6e10db40dadd0854e6e2",
@@ -35,6 +35,11 @@ BUILD_PROFILES = {
     },
     3465410: {
         "source_member_sha256": "265715d255db9c99b65add671c008c3796faaa08114e91c24a6b7c0a67af9f95",
+        "source_code_sha256": "feabf46e4729228483a827b1c15ee214418bfa9da6e35164d3c1adf493e5dc58",
+        "patched_code_sha256": "79f76d82ddcb51865494a026f814f204493bc1cebb0d872111f1cfe5fe1909bc",
+    },
+    3467658: {
+        "source_member_sha256": "f28d919481f422077f24515ea52acd61995ab1439c3d1946ad919bf8520223d2",
         "source_code_sha256": "feabf46e4729228483a827b1c15ee214418bfa9da6e35164d3c1adf493e5dc58",
         "patched_code_sha256": "79f76d82ddcb51865494a026f814f204493bc1cebb0d872111f1cfe5fe1909bc",
     },

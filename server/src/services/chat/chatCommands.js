@@ -170,6 +170,9 @@ const {
   executeFrontierRiftCommand,
 } = require("./frontierRiftCommands");
 const {
+  executeFrontierAssemblyCommand,
+} = require("../frontier/assemblyChatCommands");
+const {
   CAPITAL_NPC_CHAT_COMMANDS,
   CAPITAL_NPC_HELP_LINES,
   executeCapitalNpcCommand,
@@ -409,6 +412,8 @@ const AVAILABLE_SLASH_COMMANDS = [
   "motd",
   "mailme",
   "spawnsite",
+  "assembly",
+  "assemblies",
   "landscape",
   "ecosystem",
   "rift",
@@ -484,6 +489,7 @@ const COMMANDS_HELP_TEXT = [
   "/help",
   "/motd",
   "/mailme",
+  "/assembly <types|list|info|spawn|state|link|unlink|complete|remove>",
   "/landscape <list [name]|inspect ecosystemID|sites|spawn ecosystemID [placement]|remove siteID|nearest|here>",
   "/rift <list [name]|inspect template|sites|spawn [template] [placement]|remove siteID|nearest|here>",
   "/allskills",
@@ -10652,6 +10658,15 @@ function executeChatCommand(session, rawMessage, chatHub, options = {}) {
 
   if (command === "rift") {
     const result = executeFrontierRiftCommand(session, argumentText);
+    return handledResult(chatHub, session, options, result.message);
+  }
+
+  if (command === "assembly" || command === "assemblies") {
+    const result = executeFrontierAssemblyCommand(
+      session,
+      argumentText,
+      options.assemblyCommandOptions || {},
+    );
     return handledResult(chatHub, session, options, result.message);
   }
 

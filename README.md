@@ -7,7 +7,7 @@ Join the project Discord: [https://discord.gg/KMuJrMDEBa](https://discord.gg/KMu
 ## EVE Frontier compatibility fork
 
 This checkout contains an experimental, isolated compatibility profile for EVE
-Frontier build `3465410`. It extracts static data only from the locally
+Frontier build `3467658`. It extracts static data only from the locally
 installed client, stages a separate client copy, and leaves the retail client
 and normal EveJS installation untouched.
 
@@ -27,7 +27,8 @@ and client on the same Mac and keep every listener on `127.0.0.1`.
 Requirements:
 
 - an installed EVE Frontier client whose build has an exact
-  `tools/frontier-client/blue-so.<build>.patch.json` profile;
+  `tools/frontier-client/blue-so.<build>.patch.json` profile and matching
+  exact-build docking/feature bytecode fingerprints;
 - Node.js, npm, OpenSSL, and Python 3.12;
 - macOS `ditto`, `xattr`, `codesign`, and `security` tools.
 
@@ -35,7 +36,7 @@ From the repository root, extract and validate the installed build, then create
 the generated database. These outputs are build-numbered and ignored by Git:
 
 ```bash
-BUILD=3465410
+BUILD=3467658
 npm ci
 npm run frontier:extract -- --build "$BUILD"
 npm run frontier:validate -- --snapshot "_local/frontier-sde/$BUILD"
@@ -46,6 +47,13 @@ npm run test:frontier-static
 
 Start the server in the first terminal. Initial startup creates an isolated
 runtime and the local CA used by the staged client:
+
+When upgrading an existing Frontier world, stop the old server and migrate a
+consistent backup of its mutable `gamestore.sqlite` into the new build's
+runtime while retaining the new build's generated `gameStore/data` tree.
+`StartFrontierServer.sh` does not migrate older runtimes automatically. Keep
+the old build-numbered runtime intact and never use `--reset-runtime` during an
+upgrade.
 
 ```bash
 bash StartFrontierServer.sh --build "$BUILD"

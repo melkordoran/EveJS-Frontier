@@ -3,7 +3,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-BUILD="3465410"
+BUILD="3467658"
 RESET_RUNTIME=false
 LOG_LEVEL="2"
 
@@ -15,7 +15,7 @@ Starts an isolated EVE Frontier compatibility server on local development
 ports. It never reads or writes the live EveJS game store.
 
 Options:
-  --build <number>   Extracted/generated Frontier build. Default: 3465410
+  --build <number>   Extracted/generated Frontier build. Default: 3467658
   --reset-runtime   Replace the disposable runtime database from its generated baseline
   --quiet           Use normal rather than verbose server logging
   -h, --help        Show this help

@@ -21,6 +21,18 @@ DEFAULT_LEAF = REPO_ROOT / "server/certs/xmpp-dev-cert.pem"
 LEGACY_PATCH_MANIFEST = SCRIPT_DIR / "blue-so.patch.json"
 ENTITLEMENTS = SCRIPT_DIR / "exefile-entitlements.plist"
 DOCKING_PATCHER = SCRIPT_DIR / "patch_frontier_docking.py"
+FEATURE_PATCHER = SCRIPT_DIR / "patch_frontier_features.py"
+FEATURE_PATCH_BUILDS = {3467658}
+FRONTIER_FEATURES = [
+    "safe-logoff",
+    "skills",
+    "shell-implants",
+    "shell-reignment",
+    "map-markers",
+    "hud-system-info",
+    "hud-route",
+    "hud-search",
+]
 MANIFEST_NAMES = {
     "root:/bin64/packages/certifi/cacert.pem",
     "root:/bin64/blue.so",
@@ -119,6 +131,43 @@ def apply_docking_patch(code_archive, stage_build):
     )
 
 
+def inspect_feature_patch(code_archive, stage_build):
+    if stage_build not in FEATURE_PATCH_BUILDS:
+        return "not-configured"
+    result = run_checked(
+        [
+            resolve_python_312(),
+            "-S",
+            str(FEATURE_PATCHER),
+            "--archive",
+            str(code_archive),
+            "--build",
+            str(stage_build),
+            "--check",
+        ]
+    )
+    state = result.stdout.strip().splitlines()[-1]
+    if state not in {"source", "patched", "partial"}:
+        raise PatchError(f"Unexpected Frontier feature patch state: {state}")
+    return state
+
+
+def apply_feature_patch(code_archive, stage_build):
+    if stage_build not in FEATURE_PATCH_BUILDS:
+        return
+    run_checked(
+        [
+            resolve_python_312(),
+            "-S",
+            str(FEATURE_PATCHER),
+            "--archive",
+            str(code_archive),
+            "--build",
+            str(stage_build),
+        ]
+    )
+
+
 def codesign_is_valid(path):
     result = subprocess.run(
         ["codesign", "--verify", "--verbose=2", str(path)],
@@ -157,6 +206,15 @@ def read_build_number(start_ini):
     if not match:
         raise PatchError(f"Could not read the build number from {start_ini}")
     return int(match.group(1))
+
+
+def common_ini_uses_placebo(common_ini):
+    return bool(
+        re.search(
+            r"(?im)^\s*cryptoPack\s*=\s*Placebo\s*$",
+            common_ini.read_text(encoding="utf-8", errors="replace"),
+        )
+    )
 
 
 def read_fat_slices(path):
@@ -412,6 +470,13 @@ def update_stage_metadata(
             "codeCcpSha256": sha256_file(code_archive),
             "stationDockingPatchState": "enabled",
             "stationDockingPatchBuild": stage_build,
+            "frontierFeaturePatchState": (
+                "enabled" if stage_build in FEATURE_PATCH_BUILDS else "not-configured"
+            ),
+            "frontierFeaturePatchBuild": stage_build,
+            "frontierFeaturesEnabled": (
+                FRONTIER_FEATURES if stage_build in FEATURE_PATCH_BUILDS else []
+            ),
             "xmppCaFingerprintSha256": fingerprint,
             "xmppTrustBundles": [
                 "bin64/cacert.pem",
@@ -428,6 +493,74 @@ def update_stage_metadata(
     temporary = marker_path.with_suffix(".json.tmp")
     temporary.write_text(json.dumps(marker, indent=2) + "\n", encoding="utf-8")
     os.replace(temporary, marker_path)
+
+
+def validate_prepatch_metadata(stage_metadata, paths, stage_build):
+    expected_blue_hash = str(stage_metadata.get("blueSoSha256", "")).lower()
+    if not expected_blue_hash:
+        raise PatchError("Stage metadata is missing the blue.so source hash.")
+    if expected_blue_hash != sha256_file(paths["blue"]):
+        raise PatchError(
+            "Staged blue.so does not match the hash recorded in stage metadata."
+        )
+
+    expected_code_hash = str(stage_metadata.get("codeCcpSha256", "")).lower()
+    if not expected_code_hash:
+        if stage_build in FEATURE_PATCH_BUILDS:
+            raise PatchError(
+                "Stage metadata is missing the code.ccp source hash; restage this "
+                "build before applying the exact Frontier feature patch."
+            )
+        return
+    if expected_code_hash != sha256_file(paths["code"]):
+        raise PatchError(
+            "Staged code.ccp does not match the hash recorded in stage metadata."
+        )
+
+
+def stage_metadata_failures(stage_metadata, paths, stage_build, fingerprint):
+    failures = []
+    expected_features = FRONTIER_FEATURES if stage_build in FEATURE_PATCH_BUILDS else []
+    expected_feature_state = (
+        "enabled" if stage_build in FEATURE_PATCH_BUILDS else "not-configured"
+    )
+
+    if str(stage_metadata.get("blueSoSha256", "")).lower() != sha256_file(paths["blue"]):
+        failures.append("blue.so marker hash")
+    if stage_metadata.get("blueSoPatchState") != "manifest-verifier-patched":
+        failures.append("blue.so marker state")
+    if int(stage_metadata.get("blueSoPatchBuild", 0)) != stage_build:
+        failures.append("blue.so marker build")
+    if str(stage_metadata.get("codeCcpSha256", "")).lower() != sha256_file(paths["code"]):
+        failures.append("code.ccp marker hash")
+    if stage_metadata.get("stationDockingPatchState") != "enabled":
+        failures.append("docking marker state")
+    if int(stage_metadata.get("stationDockingPatchBuild", 0)) != stage_build:
+        failures.append("docking marker build")
+    feature_marker_present = any(
+        key in stage_metadata
+        for key in (
+            "frontierFeaturePatchState",
+            "frontierFeaturePatchBuild",
+            "frontierFeaturesEnabled",
+        )
+    )
+    if stage_build in FEATURE_PATCH_BUILDS or feature_marker_present:
+        if stage_metadata.get("frontierFeaturePatchState") != expected_feature_state:
+            failures.append("feature marker state")
+        if int(stage_metadata.get("frontierFeaturePatchBuild", 0)) != stage_build:
+            failures.append("feature marker build")
+        if stage_metadata.get("frontierFeaturesEnabled") != expected_features:
+            failures.append("feature marker list")
+    if stage_metadata.get("xmppCaFingerprintSha256") != fingerprint:
+        failures.append("CA fingerprint marker")
+    if stage_metadata.get("manifestHashesRefreshed") is not True:
+        failures.append("manifest marker")
+    if stage_metadata.get("bootCryptoPack") != "Placebo":
+        failures.append("crypto marker")
+    if stage_metadata.get("resFilesMode") != "symlink":
+        failures.append("ResFiles marker")
+    return failures
 
 
 def resolve_stage_paths(stage_argument):
@@ -447,6 +580,8 @@ def resolve_stage_paths(stage_argument):
         "bundle": build_root / "bin64/cacert.pem",
         "certifi_bundle": build_root / "bin64/packages/certifi/cacert.pem",
         "start_ini": build_root / "start.ini",
+        "common_ini": build_root / "common.ini",
+        "resfiles": stage_root / "SharedCache/ResFiles",
     }
     missing = [str(path) for key, path in paths.items() if key != "stage" and not path.exists()]
     if missing:
@@ -462,13 +597,37 @@ def main():
     parser.add_argument("--ca", type=Path, default=DEFAULT_CA)
     parser.add_argument("--leaf", type=Path, default=DEFAULT_LEAF)
     parser.add_argument("--check", action="store_true")
+    parser.add_argument(
+        "--preflight",
+        action="store_true",
+        help="Verify recorded stage hashes and isolation without changing files.",
+    )
     args = parser.parse_args()
+
+    if args.check and args.preflight:
+        raise PatchError("Choose either --check or --preflight, not both.")
 
     paths = resolve_stage_paths(args.staged_root)
     stage_metadata = load_json(paths["marker"])
     stage_build = read_build_number(paths["start_ini"])
     if int(stage_metadata.get("build", 0)) != stage_build:
         raise PatchError("Stage metadata and start.ini build numbers do not agree.")
+    if args.preflight:
+        validate_prepatch_metadata(stage_metadata, paths, stage_build)
+        if not common_ini_uses_placebo(paths["common_ini"]):
+            raise PatchError("Staged common.ini is not configured for Placebo crypto.")
+        if not paths["resfiles"].is_symlink():
+            raise PatchError("Staged ResFiles is not an isolated symlink.")
+        print(
+            f"[evejs-frontier] Stage integrity preflight passed for build {stage_build}."
+        )
+        return 0
+    if not args.check:
+        validate_prepatch_metadata(stage_metadata, paths, stage_build)
+        if not common_ini_uses_placebo(paths["common_ini"]):
+            raise PatchError("Staged common.ini is not configured for Placebo crypto.")
+        if not paths["resfiles"].is_symlink():
+            raise PatchError("Staged ResFiles is not an isolated symlink.")
     patch_manifest = resolve_patch_manifest(stage_build)
     assert_manifest_entries(paths["manifest"])
     ca_path = args.ca.expanduser().resolve()
@@ -478,18 +637,75 @@ def main():
     fingerprint = certificate_fingerprint(ca_path)
     blue_state = inspect_blue(paths["blue"], patch_manifest, stage_build)
     docking_state = inspect_docking_patch(paths["code"], stage_build)
+    feature_state = inspect_feature_patch(paths["code"], stage_build)
     bundle_paths = [paths["bundle"], paths["certifi_bundle"]]
     bundles_trusted = all(bundle_contains_ca(path, ca_text) for path in bundle_paths)
 
     if args.check:
+        manifest_current = manifest_hashes_match(paths["manifest"], paths["build"])
+        signatures_valid = (
+            codesign_is_valid(paths["blue"])
+            and codesign_is_valid(paths["exefile"])
+        )
+        entitlements_valid = exefile_has_library_entitlement(paths["exefile"])
+        crypto_valid = common_ini_uses_placebo(paths["common_ini"])
+        resfiles_valid = paths["resfiles"].is_symlink()
+        metadata_failures = stage_metadata_failures(
+            stage_metadata,
+            paths,
+            stage_build,
+            fingerprint,
+        )
         print(f"[evejs-frontier] Build: {stage_build}")
         print(f"[evejs-frontier] blue.so: {blue_state}")
         print(f"[evejs-frontier] Station docking: {docking_state}")
+        print(f"[evejs-frontier] Frontier features: {feature_state}")
         print(f"[evejs-frontier] XMPP CA in both bundles: {'yes' if bundles_trusted else 'no'}")
         print(
             "[evejs-frontier] Manifest hashes current: "
-            f"{'yes' if manifest_hashes_match(paths['manifest'], paths['build']) else 'no'}"
+            f"{'yes' if manifest_current else 'no'}"
         )
+        print(
+            "[evejs-frontier] Nested code signatures valid: "
+            f"{'yes' if signatures_valid else 'no'}"
+        )
+        print(
+            "[evejs-frontier] exefile entitlements valid: "
+            f"{'yes' if entitlements_valid else 'no'}"
+        )
+        print(
+            "[evejs-frontier] Placebo boot crypto configured: "
+            f"{'yes' if crypto_valid else 'no'}"
+        )
+        print(
+            "[evejs-frontier] ResFiles isolated symlink: "
+            f"{'yes' if resfiles_valid else 'no'}"
+        )
+        failures = []
+        if blue_state != "patched":
+            failures.append("blue.so")
+        if docking_state != "patched":
+            failures.append("station docking")
+        if stage_build in FEATURE_PATCH_BUILDS and feature_state != "patched":
+            failures.append("Frontier features")
+        if not bundles_trusted:
+            failures.append("embedded CA bundles")
+        if not manifest_current:
+            failures.append("manifest hashes")
+        if not signatures_valid:
+            failures.append("nested signatures")
+        if not entitlements_valid:
+            failures.append("exefile entitlements")
+        if not crypto_valid:
+            failures.append("Placebo boot crypto")
+        if not resfiles_valid:
+            failures.append("ResFiles symlink")
+        failures.extend(metadata_failures)
+        if failures:
+            raise PatchError(
+                "Staged client verification failed: " + ", ".join(failures)
+            )
+        verify_ca_bundles(bundle_paths, leaf_path)
         return 0
 
     touched_paths = [
@@ -513,9 +729,13 @@ def main():
         if docking_state == "source":
             apply_docking_patch(paths["code"], stage_build)
 
+        if stage_build in FEATURE_PATCH_BUILDS and feature_state != "patched":
+            apply_feature_patch(paths["code"], stage_build)
+
         needs_signing = (
             blue_state == "source"
             or not codesign_is_valid(paths["blue"])
+            or not codesign_is_valid(paths["exefile"])
             or not exefile_has_library_entitlement(paths["exefile"])
         )
         if needs_signing:
@@ -551,6 +771,11 @@ def main():
             raise PatchError("blue.so patch verification failed after signing.")
         if inspect_docking_patch(paths["code"], stage_build) != "patched":
             raise PatchError("Station docking patch verification failed.")
+        if (
+            stage_build in FEATURE_PATCH_BUILDS
+            and inspect_feature_patch(paths["code"], stage_build) != "patched"
+        ):
+            raise PatchError("Frontier feature patch verification failed.")
         if not codesign_is_valid(paths["blue"]) or not codesign_is_valid(paths["exefile"]):
             raise PatchError("Nested code-signature verification failed.")
         if not exefile_has_library_entitlement(paths["exefile"]):
@@ -574,6 +799,8 @@ def main():
     print(f"[evejs-frontier] Backup: {backup_root}")
     print(f"[evejs-frontier] blue.so: manifest verifier patched for build {stage_build}")
     print("[evejs-frontier] Station docking: enabled in staged code.ccp")
+    if stage_build in FEATURE_PATCH_BUILDS:
+        print("[evejs-frontier] Tested Frontier features: enabled in staged code.ccp")
     print(f"[evejs-frontier] XMPP CA: trusted in both embedded bundles ({fingerprint})")
     print(f"[evejs-frontier] Manifest hashes refreshed: {updated_entries}")
     print("[evejs-frontier] Nested code signatures: valid")

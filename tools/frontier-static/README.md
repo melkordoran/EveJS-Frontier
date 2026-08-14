@@ -25,7 +25,7 @@ The extractor:
 ## Extract
 
 ```bash
-npm run frontier:extract -- --build 3465410
+npm run frontier:extract -- --build 3467658
 ```
 
 The default client root is:
@@ -37,13 +37,13 @@ The default client root is:
 To inspect inputs without decoding:
 
 ```bash
-npm run frontier:extract -- --build 3465410 --dry-run
+npm run frontier:extract -- --build 3467658 --dry-run
 ```
 
 To replace a snapshot previously created by this extractor:
 
 ```bash
-npm run frontier:extract -- --build 3465410 --force
+npm run frontier:extract -- --build 3467658 --force
 ```
 
 The tool refuses to replace a non-empty directory unless it contains a
@@ -52,7 +52,7 @@ recognized extractor manifest.
 ## Validate
 
 ```bash
-npm run frontier:validate -- --snapshot _local/frontier-sde/3465410
+npm run frontier:validate -- --snapshot _local/frontier-sde/3467658
 ```
 
 Validation checks hashes, JSONL framing, key uniqueness, type/group/category
@@ -79,7 +79,7 @@ descriptors and the client modules that consume them. Export those contracts
 without importing the game runtime or modifying the client:
 
 ```bash
-npm run frontier:contracts -- --build 3465410
+npm run frontier:contracts -- --build 3467658
 ```
 
 The build-numbered output under `_local/frontier-contracts` contains a binary
@@ -93,9 +93,9 @@ The generated folder is intentionally compatible with:
 
 ```bash
 node tools/DatabaseCreator/database-creator.js \
-  --sde-dir _local/frontier-sde/3465410 \
-  --out _local/frontier-gameStore/3465410/data \
-  --build 3465410
+  --sde-dir _local/frontier-sde/3467658 \
+  --out _local/frontier-gameStore/3467658/data \
+  --build 3467658
 ```
 
 Frontier-specific map data that the current EveJS generator does not yet

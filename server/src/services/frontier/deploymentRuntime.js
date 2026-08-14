@@ -9,6 +9,10 @@ const {
   readStaticRows,
 } = require(path.join(__dirname, "../_shared/referenceData"));
 const itemStore = require(path.join(__dirname, "../inventory/itemStore"));
+const {
+  ROLEMASK_VIEW,
+  normalizeRoleValue,
+} = require(path.join(__dirname, "../account/accountRoleProfiles"));
 
 const ASSEMBLY_STATUS_OFFLINE = 1;
 const ASSEMBLY_STATUS_ONLINE = 2;
@@ -62,6 +66,20 @@ function getSolarSystemID(session) {
     session && (session.solarsystemid2 || session.solarsystemid || session.locationid),
     0,
   );
+}
+
+function hasAssemblyAdminPrivileges(session) {
+  const accountRole = normalizeRoleValue(
+    session && session.accountRole,
+    0n,
+  );
+  return (accountRole & ROLEMASK_VIEW) !== 0n;
+}
+
+function validateAssemblyAdminSession(session) {
+  return hasAssemblyAdminPrivileges(session)
+    ? { success: true }
+    : { success: false, errorMsg: "ASSEMBLY_ADMIN_ACCESS_DENIED" };
 }
 
 function sequenceItems(value) {
@@ -389,6 +407,78 @@ function getBuildDefinition(assemblyTypeID) {
     );
   }
   return buildDefinitionsByTypeID.get(toInt(assemblyTypeID, 0)) || null;
+}
+
+function listAssemblyDefinitions() {
+  if (!buildDefinitionsByTypeID) {
+    getBuildDefinition(0);
+  }
+  return [...buildDefinitionsByTypeID.values()]
+    .map((definition) => {
+      const metadata = itemStore.getItemMetadata(definition.assemblyTypeID);
+      return {
+        ...definition,
+        constructionCost: { ...definition.constructionCost },
+        name: String(
+          metadata && metadata.name || `Type ${definition.assemblyTypeID}`,
+        ),
+        published: metadata ? metadata.published !== false : false,
+      };
+    })
+    .sort((left, right) => (
+      left.name.localeCompare(right.name) ||
+      left.assemblyTypeID - right.assemblyTypeID
+    ));
+}
+
+function buildAssemblyRecord(item, state = readConstructionState(item)) {
+  if (!item || !state) {
+    return null;
+  }
+  const definition = getBuildDefinition(state.assemblyTypeID);
+  const metadata = itemStore.getItemMetadata(state.assemblyTypeID);
+  const position = normalizeWorldVector(
+    item.spaceState && item.spaceState.position,
+  );
+  return {
+    assemblyStatus: state.assemblyStatus,
+    assemblyTypeID: state.assemblyTypeID,
+    completeAtMs: state.completeAtMs,
+    constructionSiteTypeID: state.constructionSiteTypeID,
+    createOnChain: Boolean(definition && definition.createOnChain),
+    destinationGateID: state.destinationGateID,
+    durationSeconds: state.durationSeconds,
+    itemID: toInt(item.itemID, 0),
+    name: String(
+      item.itemName || metadata && metadata.name || `Type ${state.assemblyTypeID}`,
+    ),
+    ownerID: toInt(item.ownerID, 0),
+    position,
+    published: metadata ? metadata.published !== false : false,
+    solarSystemID: state.solarSystemID,
+    targetSolarSystemID: state.targetSolarSystemID,
+  };
+}
+
+function getAssemblyRecord(itemID) {
+  const numericItemID = Number(itemID);
+  if (!Number.isSafeInteger(numericItemID) || numericItemID <= 0) {
+    return null;
+  }
+  return buildAssemblyRecord(itemStore.findItemById(numericItemID));
+}
+
+function listAssemblies(filters = {}) {
+  const ownerID = toInt(filters.ownerID, 0);
+  const solarSystemID = toInt(filters.solarSystemID, 0);
+  return Object.values(itemStore.getAllItems())
+    .map((item) => buildAssemblyRecord(item))
+    .filter(Boolean)
+    .filter((record) => ownerID <= 0 || record.ownerID === ownerID)
+    .filter((record) => (
+      solarSystemID <= 0 || record.solarSystemID === solarSystemID
+    ))
+    .sort((left, right) => left.itemID - right.itemID);
 }
 
 function getSolarSystemRecord(solarSystemID) {
@@ -1943,6 +2033,650 @@ function cancelConstruction(session, itemID) {
   return { success: true, data: { changes } };
 }
 
+function clearPendingAssemblyTransitionsForItem(itemID) {
+  const numericItemID = toInt(itemID, 0);
+  for (const [transactionUUID, transition] of pendingAssemblyTransitions) {
+    if (transition && transition.itemID === numericItemID) {
+      pendingAssemblyTransitions.delete(transactionUUID);
+    }
+  }
+}
+
+function findAssemblyOwnerSession(session, ownerID) {
+  const numericOwnerID = toInt(ownerID, 0);
+  if (numericOwnerID <= 0) {
+    return null;
+  }
+  if (getCharacterID(session) === numericOwnerID) {
+    return session;
+  }
+  const sessionRegistry = require(path.join(__dirname, "../chat/sessionRegistry"));
+  return sessionRegistry.findSessionByCharacterID(numericOwnerID) || null;
+}
+
+function syncAdminChanges(session, ownerID, changes) {
+  const ownerSession = findAssemblyOwnerSession(session, ownerID);
+  syncChanges(ownerSession, changes);
+  return ownerSession;
+}
+
+function adminSpawnAssembly(session, assemblyTypeID, rawPosition, options = {}) {
+  const access = validateAssemblyAdminSession(session);
+  if (!access.success) {
+    return access;
+  }
+  const characterID = getCharacterID(session);
+  const solarSystemID = getSolarSystemID(session);
+  const numericTypeID = Number(assemblyTypeID);
+  const position = normalizeWorldVector(rawPosition);
+  if (characterID <= 0 || solarSystemID <= 0) {
+    return { success: false, errorMsg: "NOT_IN_SPACE" };
+  }
+  if (!Number.isSafeInteger(numericTypeID) || numericTypeID <= 0) {
+    return { success: false, errorMsg: "ASSEMBLY_TYPE_NOT_SUPPORTED" };
+  }
+  const definition = getBuildDefinition(numericTypeID);
+  if (!definition) {
+    return { success: false, errorMsg: "ASSEMBLY_TYPE_NOT_SUPPORTED" };
+  }
+  if (!position) {
+    return { success: false, errorMsg: "INVALID_DEPLOYMENT_PLACEMENT" };
+  }
+
+  const shipItem = itemStore.getActiveShipItem(characterID);
+  const shipEntity = getSessionShipEntity(session, shipItem);
+  if (
+    !shipItem ||
+    !shipEntity ||
+    toInt(shipItem.locationID, 0) !== solarSystemID ||
+    toInt(shipItem.flagID, -1) !== 0
+  ) {
+    return { success: false, errorMsg: "SHIP_NOT_IN_SPACE" };
+  }
+
+  const requestedStatus = options.assemblyStatus === undefined ||
+      options.assemblyStatus === null
+    ? (definition.createOnChain
+      ? ASSEMBLY_STATUS_OFFLINE
+      : ASSEMBLY_STATUS_ONLINE)
+    : toInt(options.assemblyStatus, 0);
+  if (
+    requestedStatus !== ASSEMBLY_STATUS_OFFLINE &&
+    requestedStatus !== ASSEMBLY_STATUS_ONLINE
+  ) {
+    return { success: false, errorMsg: "INVALID_ASSEMBLY_STATE" };
+  }
+  if (requestedStatus === ASSEMBLY_STATUS_ONLINE && isSmartGateDefinition(definition)) {
+    return {
+      success: false,
+      errorMsg: isSlingshotGateType(numericTypeID)
+        ? "SMART_GATE_LINK_NOT_SUPPORTED"
+        : "SMART_GATE_DESTINATION_REQUIRED",
+    };
+  }
+
+  const rotationInput = Array.isArray(options.dunRotation)
+    ? options.dunRotation.slice(0, 3).map((value) => Number(value))
+    : [0, 0, 0];
+  if (rotationInput.length !== 3 || !rotationInput.every(Number.isFinite)) {
+    return { success: false, errorMsg: "INVALID_DEPLOYMENT_ROTATION" };
+  }
+  const metadata = itemStore.getItemMetadata(numericTypeID);
+  if (!metadata || toInt(metadata.typeID, 0) <= 0) {
+    return { success: false, errorMsg: "ASSEMBLY_TYPE_NOT_FOUND" };
+  }
+
+  const nowMs = Date.now();
+  const state = {
+    assemblyStatus: requestedStatus,
+    assemblyTypeID: numericTypeID,
+    completeAtMs: 0,
+    completedAtMs: nowMs,
+    constructionCost: definition.constructionCost,
+    constructionSiteTypeID: definition.constructionSiteTypeID,
+    createdAtMs: nowMs,
+    destinationGateID: 0,
+    durationSeconds: definition.durationSeconds,
+    ownerID: characterID,
+    solarSystemID,
+    targetSolarSystemID: 0,
+  };
+  const createResult = itemStore.createSpaceItemForCharacter(
+    characterID,
+    solarSystemID,
+    metadata,
+    {
+      customInfo: writeConstructionState(null, state),
+      dunRotation: rotationInput,
+      mode: "STOP",
+      position,
+    },
+  );
+  if (!createResult.success || !createResult.data) {
+    return createResult.success
+      ? { success: false, errorMsg: "ASSEMBLY_CREATE_FAILED" }
+      : createResult;
+  }
+
+  const spawnResult = getSpaceRuntime().spawnDynamicInventoryEntity(
+    solarSystemID,
+    createResult.data.itemID,
+    { broadcast: true },
+  );
+  if (!spawnResult.success) {
+    const rollback = itemStore.removeInventoryItem(createResult.data.itemID, {
+      removeContents: false,
+    });
+    if (!rollback.success) {
+      log.error(
+        `[FrontierDeployment] Admin spawn rollback failed item=${createResult.data.itemID} ` +
+          `reason=${rollback.errorMsg || "UNKNOWN"}`,
+      );
+    }
+    return spawnResult;
+  }
+
+  syncChanges(session, createResult.changes || []);
+  notifyAssemblyAdded(session, createResult.data.itemID, solarSystemID);
+  log.info(
+    `[FrontierDeployment] Admin spawned assembly char=${characterID} ` +
+      `item=${createResult.data.itemID} type=${numericTypeID} ` +
+      `system=${solarSystemID} state=${requestedStatus}`,
+  );
+  return {
+    success: true,
+    data: {
+      item: createResult.data,
+      record: buildAssemblyRecord(createResult.data, state),
+    },
+  };
+}
+
+function adminSetAssemblyState(session, itemID, targetStatus) {
+  const access = validateAssemblyAdminSession(session);
+  if (!access.success) {
+    return access;
+  }
+  const numericItemID = Number(itemID);
+  const numericTargetStatus = toInt(targetStatus, 0);
+  if (!Number.isSafeInteger(numericItemID) || numericItemID <= 0) {
+    return { success: false, errorMsg: "ASSEMBLY_NOT_FOUND" };
+  }
+  if (
+    numericTargetStatus !== ASSEMBLY_STATUS_OFFLINE &&
+    numericTargetStatus !== ASSEMBLY_STATUS_ONLINE
+  ) {
+    return { success: false, errorMsg: "INVALID_ASSEMBLY_STATE" };
+  }
+  const item = itemStore.findItemById(numericItemID);
+  const state = readConstructionState(item);
+  const definition = state && getBuildDefinition(state.assemblyTypeID);
+  if (!item || !state || !definition) {
+    return { success: false, errorMsg: "ASSEMBLY_NOT_FOUND" };
+  }
+  if (state.assemblyStatus === ASSEMBLY_STATUS_UNDER_CONSTRUCTION) {
+    return { success: false, errorMsg: "ASSEMBLY_UNDER_CONSTRUCTION" };
+  }
+  if (state.assemblyStatus === numericTargetStatus) {
+    return {
+      success: true,
+      data: { alreadyApplied: true, item, record: buildAssemblyRecord(item, state) },
+    };
+  }
+  if (numericTargetStatus === ASSEMBLY_STATUS_ONLINE && isSmartGateDefinition(definition)) {
+    if (isSlingshotGateType(state.assemblyTypeID)) {
+      return { success: false, errorMsg: "SMART_GATE_LINK_NOT_SUPPORTED" };
+    }
+    const destination = validateSmartGate(state.destinationGateID);
+    if (
+      !destination.success ||
+      destination.state.destinationGateID !== numericItemID ||
+      destination.state.solarSystemID !== state.targetSolarSystemID ||
+      destination.state.targetSolarSystemID !== state.solarSystemID ||
+      destination.state.assemblyTypeID !== state.assemblyTypeID ||
+      toInt(destination.item.ownerID, 0) !== toInt(item.ownerID, 0)
+    ) {
+      return { success: false, errorMsg: "SMART_GATE_DESTINATION_REQUIRED" };
+    }
+  }
+
+  const updateResult = itemStore.updateInventoryItem(numericItemID, (currentItem) => ({
+    ...currentItem,
+    customInfo: writeConstructionState(currentItem, {
+      ...state,
+      assemblyStatus: numericTargetStatus,
+    }),
+  }));
+  if (!updateResult.success || !updateResult.data) {
+    return updateResult;
+  }
+  const updatedState = readConstructionState(updateResult.data);
+  const ownerSession = findAssemblyOwnerSession(session, item.ownerID);
+  const presentation = refreshAssemblyStatePresentation(
+    ownerSession || session,
+    updateResult.data,
+    updatedState,
+  );
+  if (!presentation.success) {
+    const rollback = itemStore.updateInventoryItem(
+      numericItemID,
+      updateResult.previousData,
+    );
+    if (!rollback.success) {
+      log.error(
+        `[FrontierDeployment] Admin state rollback failed item=${numericItemID} ` +
+          `reason=${rollback.errorMsg || "UNKNOWN"}`,
+      );
+    }
+    refreshAssemblyStatePresentation(
+      ownerSession || session,
+      updateResult.previousData,
+      state,
+    );
+    return {
+      ...presentation,
+      rollbackError: rollback.success ? null : rollback.errorMsg,
+    };
+  }
+  clearPendingAssemblyTransitionsForItem(numericItemID);
+  syncAdminChanges(session, item.ownerID, [{
+    item: updateResult.data,
+    previousData: updateResult.previousData,
+  }]);
+  log.info(
+    `[FrontierDeployment] Admin set assembly state char=${getCharacterID(session)} ` +
+      `item=${numericItemID} state=${numericTargetStatus}`,
+  );
+  return {
+    success: true,
+    data: {
+      item: updateResult.data,
+      record: buildAssemblyRecord(updateResult.data, updatedState),
+    },
+  };
+}
+
+function validateAdminGateLink(sourceGateID, destinationGateID) {
+  const source = validateSmartGate(sourceGateID);
+  if (!source.success) {
+    return source;
+  }
+  const destination = validateSmartGate(destinationGateID);
+  if (!destination.success) {
+    return destination;
+  }
+  if (isSlingshotGateType(source.state.assemblyTypeID)) {
+    return { success: false, errorMsg: "SMART_GATE_LINK_NOT_SUPPORTED" };
+  }
+  if (source.item.itemID === destination.item.itemID) {
+    return { success: false, errorMsg: "SMART_GATE_SELF_LINK" };
+  }
+  if (
+    toInt(source.item.ownerID, 0) <= 0 ||
+    toInt(source.item.ownerID, 0) !== toInt(destination.item.ownerID, 0)
+  ) {
+    return { success: false, errorMsg: "ASSEMBLY_OWNER_MISMATCH" };
+  }
+  if (source.state.solarSystemID === destination.state.solarSystemID) {
+    return { success: false, errorMsg: "SMART_GATE_SAME_SYSTEM" };
+  }
+  if (source.state.assemblyTypeID !== destination.state.assemblyTypeID) {
+    return { success: false, errorMsg: "SMART_GATE_TYPE_MISMATCH" };
+  }
+  if (source.state.destinationGateID > 0 || destination.state.destinationGateID > 0) {
+    return { success: false, errorMsg: "SMART_GATE_ALREADY_LINKED" };
+  }
+  if (
+    source.state.assemblyStatus !== ASSEMBLY_STATUS_OFFLINE ||
+    destination.state.assemblyStatus !== ASSEMBLY_STATUS_OFFLINE
+  ) {
+    return { success: false, errorMsg: "SMART_GATE_MUST_BE_OFFLINE" };
+  }
+  const distanceLightYears = getSolarSystemDistanceLightYears(
+    source.state.solarSystemID,
+    destination.state.solarSystemID,
+  );
+  if (!Number.isFinite(distanceLightYears)) {
+    return { success: false, errorMsg: "SMART_GATE_SYSTEM_DATA_UNAVAILABLE" };
+  }
+  if (distanceLightYears > source.definition.smartGate.rangeLightYears) {
+    return {
+      success: false,
+      errorMsg: "SMART_GATE_OUT_OF_RANGE",
+      data: {
+        distanceLightYears,
+        rangeLightYears: source.definition.smartGate.rangeLightYears,
+      },
+    };
+  }
+  return {
+    success: true,
+    destination,
+    distanceLightYears,
+    source: {
+      ...source,
+      characterID: toInt(source.item.ownerID, 0),
+    },
+  };
+}
+
+function adminLinkSmartGates(session, sourceGateID, destinationGateID) {
+  const access = validateAssemblyAdminSession(session);
+  if (!access.success) {
+    return access;
+  }
+  const sourceID = Number(sourceGateID);
+  const destinationID = Number(destinationGateID);
+  if (
+    !Number.isSafeInteger(sourceID) || sourceID <= 0 ||
+    !Number.isSafeInteger(destinationID) || destinationID <= 0
+  ) {
+    return { success: false, errorMsg: "ASSEMBLY_NOT_FOUND" };
+  }
+  const validation = validateAdminGateLink(sourceID, destinationID);
+  if (!validation.success) {
+    return validation;
+  }
+  const ownerSession = findAssemblyOwnerSession(
+    session,
+    validation.source.characterID,
+  );
+  const updateResult = updateLinkedGatePair(ownerSession, validation);
+  if (!updateResult.success) {
+    return updateResult;
+  }
+  clearPendingAssemblyTransitionsForItem(sourceID);
+  clearPendingAssemblyTransitionsForItem(destinationID);
+  log.info(
+    `[FrontierDeployment] Admin linked gates char=${getCharacterID(session)} ` +
+      `source=${sourceID} destination=${destinationID}`,
+  );
+  return updateResult;
+}
+
+function adminUnlinkSmartGate(session, sourceGateID) {
+  const access = validateAssemblyAdminSession(session);
+  if (!access.success) {
+    return access;
+  }
+  const sourceID = Number(sourceGateID);
+  if (!Number.isSafeInteger(sourceID) || sourceID <= 0) {
+    return { success: false, errorMsg: "ASSEMBLY_NOT_FOUND" };
+  }
+  const source = validateSmartGate(sourceID);
+  if (!source.success) {
+    return source;
+  }
+  if (source.state.destinationGateID <= 0) {
+    return { success: false, errorMsg: "SMART_GATE_NOT_LINKED" };
+  }
+  if (source.state.assemblyStatus !== ASSEMBLY_STATUS_OFFLINE) {
+    return { success: false, errorMsg: "SMART_GATE_MUST_BE_OFFLINE" };
+  }
+  const destination = validateSmartGate(source.state.destinationGateID);
+  const reciprocal = Boolean(
+    destination.success &&
+    destination.state.destinationGateID === sourceID &&
+    toInt(destination.item.ownerID, 0) === toInt(source.item.ownerID, 0),
+  );
+  if (
+    reciprocal &&
+    destination.state.assemblyStatus !== ASSEMBLY_STATUS_OFFLINE
+  ) {
+    return { success: false, errorMsg: "SMART_GATE_MUST_BE_OFFLINE" };
+  }
+
+  const sourceUpdate = itemStore.updateInventoryItem(sourceID, (currentItem) => ({
+    ...currentItem,
+    customInfo: writeConstructionState(currentItem, {
+      ...source.state,
+      destinationGateID: 0,
+      targetSolarSystemID: 0,
+    }),
+  }));
+  if (!sourceUpdate.success || !sourceUpdate.data) {
+    return sourceUpdate;
+  }
+  let destinationUpdate = null;
+  if (reciprocal) {
+    destinationUpdate = itemStore.updateInventoryItem(
+      destination.item.itemID,
+      (currentItem) => ({
+        ...currentItem,
+        customInfo: writeConstructionState(currentItem, {
+          ...destination.state,
+          destinationGateID: 0,
+          targetSolarSystemID: 0,
+        }),
+      }),
+    );
+    if (!destinationUpdate.success || !destinationUpdate.data) {
+      const rollback = itemStore.updateInventoryItem(
+        sourceID,
+        sourceUpdate.previousData,
+      );
+      if (!rollback.success) {
+        log.error(
+          `[FrontierDeployment] Admin gate unlink rollback failed item=${sourceID} ` +
+            `reason=${rollback.errorMsg || "UNKNOWN"}`,
+        );
+      }
+      return {
+        ...destinationUpdate,
+        rollbackError: rollback.success ? null : rollback.errorMsg,
+      };
+    }
+  }
+
+  const ownerSession = findAssemblyOwnerSession(session, source.item.ownerID);
+  refreshAssemblyStatePresentation(
+    ownerSession,
+    sourceUpdate.data,
+    readConstructionState(sourceUpdate.data),
+  );
+  if (destinationUpdate && destinationUpdate.data) {
+    refreshAssemblyStatePresentation(
+      ownerSession,
+      destinationUpdate.data,
+      readConstructionState(destinationUpdate.data),
+    );
+  }
+  const changes = [{
+    item: sourceUpdate.data,
+    previousData: sourceUpdate.previousData,
+  }];
+  if (destinationUpdate && destinationUpdate.data) {
+    changes.push({
+      item: destinationUpdate.data,
+      previousData: destinationUpdate.previousData,
+    });
+  }
+  syncAdminChanges(session, source.item.ownerID, changes);
+  clearPendingAssemblyTransitionsForItem(sourceID);
+  if (destination.success) {
+    clearPendingAssemblyTransitionsForItem(destination.item.itemID);
+  }
+  log.info(
+    `[FrontierDeployment] Admin unlinked gates char=${getCharacterID(session)} ` +
+      `source=${sourceID} destination=${source.state.destinationGateID} ` +
+      `reciprocal=${reciprocal}`,
+  );
+  return {
+    success: true,
+    data: {
+      destination: destinationUpdate && destinationUpdate.data,
+      repairedSourceOnly: !reciprocal,
+      source: sourceUpdate.data,
+    },
+  };
+}
+
+function hasPersistedBerthReference(hostAssemblyID) {
+  const numericHostID = toInt(hostAssemblyID, 0);
+  const berthingRuntime = require(path.join(__dirname, "./berthingRuntime"));
+  return Object.values(itemStore.getAllItems()).some((candidate) => (
+    berthingRuntime.readBerthHostIDFromCustomInfo(
+      candidate && candidate.customInfo,
+    ) === numericHostID
+  ));
+}
+
+function adminCompleteConstruction(session, itemID) {
+  const access = validateAssemblyAdminSession(session);
+  if (!access.success) {
+    return access;
+  }
+  const numericItemID = Number(itemID);
+  if (!Number.isSafeInteger(numericItemID) || numericItemID <= 0) {
+    return { success: false, errorMsg: "CONSTRUCTION_SITE_NOT_FOUND" };
+  }
+  const item = itemStore.findItemById(numericItemID);
+  const state = readConstructionState(item);
+  if (!item || !state) {
+    return { success: false, errorMsg: "CONSTRUCTION_SITE_NOT_FOUND" };
+  }
+  if (state.assemblyStatus !== ASSEMBLY_STATUS_UNDER_CONSTRUCTION) {
+    return { success: false, errorMsg: "CONSTRUCTION_ALREADY_COMPLETE" };
+  }
+  const ownerSession = findAssemblyOwnerSession(session, item.ownerID);
+  const result = completeConstruction(numericItemID, {
+    force: true,
+    session: ownerSession,
+  });
+  if (result.success) {
+    log.info(
+      `[FrontierDeployment] Admin completed construction char=${getCharacterID(session)} ` +
+        `item=${numericItemID}`,
+    );
+  }
+  return result;
+}
+
+function adminRemoveAssembly(session, itemID) {
+  const access = validateAssemblyAdminSession(session);
+  if (!access.success) {
+    return access;
+  }
+  const numericItemID = Number(itemID);
+  if (!Number.isSafeInteger(numericItemID) || numericItemID <= 0) {
+    return { success: false, errorMsg: "ASSEMBLY_NOT_FOUND" };
+  }
+  const item = itemStore.findItemById(numericItemID);
+  const state = readConstructionState(item);
+  if (!item || !state) {
+    return { success: false, errorMsg: "ASSEMBLY_NOT_FOUND" };
+  }
+  if (
+    state.assemblyStatus !== ASSEMBLY_STATUS_UNDER_CONSTRUCTION &&
+    state.assemblyStatus !== ASSEMBLY_STATUS_OFFLINE
+  ) {
+    return { success: false, errorMsg: "ASSEMBLY_MUST_BE_OFFLINE" };
+  }
+  if (state.destinationGateID > 0) {
+    return { success: false, errorMsg: "SMART_GATE_MUST_BE_UNLINKED" };
+  }
+  const inboundGate = listAssemblies().find(
+    (candidate) => (
+      candidate.itemID !== numericItemID &&
+      candidate.destinationGateID === numericItemID
+    ),
+  );
+  if (inboundGate) {
+    return {
+      success: false,
+      errorMsg: "SMART_GATE_MUST_BE_UNLINKED",
+      data: { linkedFromItemID: inboundGate.itemID },
+    };
+  }
+  const contents = itemStore.listContainerItems(null, numericItemID, null);
+  if (contents.length > 0) {
+    return {
+      success: false,
+      errorMsg: "ASSEMBLY_NOT_EMPTY",
+      data: { itemCount: contents.length },
+    };
+  }
+  const networkNodeFuelRuntime = require(path.join(
+    __dirname,
+    "./networkNodeFuelRuntime",
+  ));
+  const fuelState = networkNodeFuelRuntime.readNetworkNodeFuelState(item);
+  if (fuelState.quantity > 0) {
+    return {
+      success: false,
+      errorMsg: "ASSEMBLY_NOT_EMPTY",
+      data: {
+        fuelQuantity: fuelState.quantity,
+        fuelTypeID: fuelState.typeID,
+      },
+    };
+  }
+  const berthingRuntime = require(path.join(__dirname, "./berthingRuntime"));
+  if (
+    hasPersistedBerthReference(numericItemID) ||
+    (typeof berthingRuntime.hasActiveContractForHostAssembly === "function" &&
+      berthingRuntime.hasActiveContractForHostAssembly(numericItemID))
+  ) {
+    return { success: false, errorMsg: "ASSEMBLY_OCCUPIED" };
+  }
+
+  const spaceRuntime = getSpaceRuntime();
+  const scene = spaceRuntime.scenes instanceof Map
+    ? spaceRuntime.scenes.get(state.solarSystemID) || null
+    : null;
+  const entity = scene && typeof scene.getEntityByID === "function"
+    ? scene.getEntityByID(numericItemID)
+    : null;
+  if (entity) {
+    const sceneRemoval = scene.removeDynamicEntity(numericItemID, {
+      broadcast: true,
+      persistSpaceState: false,
+    });
+    if (!sceneRemoval || sceneRemoval.success !== true) {
+      return sceneRemoval || { success: false, errorMsg: "ASSEMBLY_SCENE_REMOVE_FAILED" };
+    }
+  }
+
+  const removeResult = itemStore.removeInventoryItem(numericItemID, {
+    removeContents: false,
+  });
+  if (!removeResult.success) {
+    let rollbackError = null;
+    if (entity) {
+      const rollback = spaceRuntime.spawnDynamicInventoryEntity(
+        state.solarSystemID,
+        numericItemID,
+        { broadcast: true },
+      );
+      if (!rollback || rollback.success !== true) {
+        rollbackError = rollback && rollback.errorMsg
+          ? rollback.errorMsg
+          : "ASSEMBLY_PRESENTATION_ROLLBACK_FAILED";
+        log.error(
+          `[FrontierDeployment] Admin remove presentation rollback failed ` +
+            `item=${numericItemID} reason=${rollbackError}`,
+        );
+      }
+    }
+    return { ...removeResult, rollbackError };
+  }
+  clearCompletionTimer(numericItemID);
+  clearPendingAssemblyTransitionsForItem(numericItemID);
+  syncAdminChanges(
+    session,
+    item.ownerID,
+    removeResult.data && removeResult.data.changes,
+  );
+  log.info(
+    `[FrontierDeployment] Admin removed assembly char=${getCharacterID(session)} ` +
+      `item=${numericItemID} type=${state.assemblyTypeID} system=${state.solarSystemID}`,
+  );
+  return {
+    success: true,
+    data: { record: buildAssemblyRecord(item, state) },
+  };
+}
+
 function hydrateConstructionEntityFromInventoryItem(entity, item) {
   const state = readConstructionState(item);
   if (!entity || !state) {
@@ -2071,6 +2805,12 @@ module.exports = {
   ASSEMBLY_STATUS_ONLINE,
   ASSEMBLY_STATUS_UNDER_CONSTRUCTION,
   CONSTRUCTION_INFO_KEY,
+  adminCompleteConstruction,
+  adminLinkSmartGates,
+  adminRemoveAssembly,
+  adminSetAssemblyState,
+  adminSpawnAssembly,
+  adminUnlinkSmartGate,
   beginGateJumpTransition,
   beginGateLinkTransition,
   beginGateUnlinkTransition,
@@ -2084,7 +2824,11 @@ module.exports = {
   completeConstruction,
   depositItems,
   getDepositedItemsByType,
+  getAssemblyRecord,
+  hasAssemblyAdminPrivileges,
   hydrateConstructionEntityFromInventoryItem,
+  listAssemblies,
+  listAssemblyDefinitions,
   listOwnedSmartGates,
   listMyAssemblies,
   recordAssemblyInteraction,
@@ -2099,6 +2843,7 @@ module.exports = {
     isValidAssemblyTransitionSignature,
     isCompletedNetworkNodeBuildAnchorState,
     getSmartGateActivationState,
+    hasPersistedBerthReference,
     getSolarSystemDistanceLightYears,
     isSlingshotGateType,
     isSmartGateDefinition,

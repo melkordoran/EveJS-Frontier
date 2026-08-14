@@ -181,6 +181,20 @@ function persistCharacterLogoffState(session) {
   let persistedStructureID = sessionStructureID;
   let persistedSolarSystemID = nextSolarSystemID;
   const activeShip = getActiveShipRecord(characterID);
+  const {
+    clearSafeLogoffCompletion,
+    consumeSafeLogoffCompletion,
+  } = require(path.join(__dirname, "../ship/safeLogoffRuntime"));
+  let completedSafeLogoff = false;
+  if (activeShip) {
+    completedSafeLogoff = Boolean(consumeSafeLogoffCompletion(session, {
+      characterID,
+      shipID: activeShip.itemID,
+      nowMs: Date.now(),
+    }));
+  } else {
+    clearSafeLogoffCompletion(session);
+  }
 
   if (!persistedStationID && !persistedStructureID && activeShip) {
     const liveSpaceState = resolveLiveShipSpaceState(
@@ -189,7 +203,8 @@ function persistCharacterLogoffState(session) {
       persistedSolarSystemID,
     );
     if (liveSpaceState) {
-      const persistedSpaceState = shipSuppressesEmergencyWarp(characterID)
+      const persistedSpaceState =
+        completedSafeLogoff || shipSuppressesEmergencyWarp(characterID)
         ? liveSpaceState
         : buildEmergencyWarpLogoffState(liveSpaceState, {
             characterID,
@@ -296,6 +311,15 @@ function disconnectCharacterSession(session, options = {}) {
   };
 
   try {
+    attemptCleanup("safe-logoff timer cleanup", () => {
+      const { cancelSafeLogoff } = require(path.join(
+        __dirname,
+        "../ship/safeLogoffRuntime",
+      ));
+      // A completed Safe Logoff token must survive timer cleanup long enough
+      // for logoff persistence to consume it against this character and ship.
+      cancelSafeLogoff(session, { clearCompletion: false });
+    });
     attemptCleanup("logoff persistence", () => persistCharacterLogoffState(session));
     // Checkpoint the daily login campaign so time played this session counts
     // toward the login milestone even when the client disconnects abruptly.

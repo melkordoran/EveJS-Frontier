@@ -46,6 +46,7 @@ const PRIMARY_ENTITY_ARGUMENT_COUNTS = Object.freeze({
   SetMaxSpeed: 2,
   SetPitch: 2,
   SetSpeedFraction: 2,
+  SetStrafingThrust: 4,
   SetYawRate: 2,
   Stop: 1,
   TerminalPlayDestructionEffect: 2,

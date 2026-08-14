@@ -43,8 +43,9 @@ function buildBeaconRow(row) {
 }
 
 class IffMapService extends CairnService {
-  constructor() {
-    super("iffMapService");
+  constructor(options = {}) {
+    super("iffMapService", options);
+    this.options = options;
   }
 
   /**
@@ -89,10 +90,19 @@ class IffMapService extends CairnService {
     const rawCode = list.length > 2 ? unwrapMarshalValue(list[2]) : null;
     const characterID = resolveSessionCharacterID(session);
 
-    const item = itemID > 0 ? findItemById(itemID) : null;
+    const resolveItem = typeof this.options.findItemById === "function"
+      ? this.options.findItemById
+      : findItemById;
+    const item = itemID > 0 ? resolveItem(itemID) : null;
     if (!item || toInt(item.ownerID, 0) !== characterID || characterID <= 0) {
       log.warn(
         `[iffMap] set_transponder rejected item=${itemID} char=${characterID} reason=ITEM_NOT_OWNED`,
+      );
+      return false;
+    }
+    if (!CairnService.CAIRN_TYPE_IDS.has(toInt(item.typeID, 0))) {
+      log.warn(
+        `[iffMap] set_transponder rejected item=${itemID} char=${characterID} reason=ITEM_NOT_CAIRN`,
       );
       return false;
     }
@@ -109,7 +119,11 @@ class IffMapService extends CairnService {
       return false;
     }
 
-    const writeResult = iffRuntime.writeTransponderState(itemID, configuration);
+    const writeTransponderState =
+      typeof this.options.writeTransponderState === "function"
+        ? this.options.writeTransponderState
+        : iffRuntime.writeTransponderState;
+    const writeResult = writeTransponderState(itemID, configuration);
     if (!writeResult || writeResult.success !== true) {
       log.warn(
         `[iffMap] set_transponder write failed item=${itemID} ` +

@@ -79,6 +79,7 @@ function inferDestinyContract(updates = [], options = {}) {
     name === "Orbit" ||
     name === "FollowBall" ||
     name === "SetPitch" ||
+    name === "SetStrafingThrust" ||
     name === "SetYawRate" ||
     name === "Stop" ||
     name === "WarpTo"
