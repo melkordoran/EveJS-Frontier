@@ -20,6 +20,8 @@ const {
   integrateCarbonMotion: integrateDefaultCarbonMotion,
 } = require("./carbonIntegration");
 
+const DEFAULT_WORLD_UP = Object.freeze({ x: 0, y: 1, z: 0 });
+
 function createDestinyMovementSimulator(deps = {}) {
   const {
     addVectors,
@@ -250,7 +252,9 @@ function createDestinyMovementSimulator(deps = {}) {
       currentSpeedFraction,
     );
     entity.direction =
-      nextSpeed > 0.05
+      hasManualStrafingThrust(entity)
+        ? turnStep.direction
+        : nextSpeed > 0.05
         ? normalizeVector(integration.nextVelocity, turnStep.direction)
         : turnStep.direction;
     entity.velocity =
@@ -668,7 +672,64 @@ function createDestinyMovementSimulator(deps = {}) {
     const desiredDirection = getCommandDirection(entity, entity.direction);
     const desiredSpeed =
       entity.maxVelocity * clamp(entity.speedFraction, 0, MAX_SUBWARP_SPEED_FRACTION);
-    return applyDesiredVelocity(entity, desiredDirection, desiredSpeed, deltaSeconds);
+    const result = applyDesiredVelocity(
+      entity,
+      desiredDirection,
+      desiredSpeed,
+      deltaSeconds,
+    );
+    const strafeChanged = applyManualStrafingThrust(entity, deltaSeconds);
+    return {
+      ...result,
+      changed: result.changed || strafeChanged,
+    };
+  }
+
+  function hasManualStrafingThrust(entity) {
+    return Boolean(
+      entity &&
+      entity.manualFlightActive === true &&
+      magnitude(entity.manualStrafingThrust || { x: 0, y: 0, z: 0 }) >
+        0.000001
+    );
+  }
+
+  function applyManualStrafingThrust(entity, deltaSeconds) {
+    if (!hasManualStrafingThrust(entity) || entity.mode !== "GOTO") {
+      return false;
+    }
+
+    const delta = Math.max(0, toFiniteNumber(deltaSeconds, 0));
+    if (delta <= 0) {
+      return false;
+    }
+    const thrust = cloneVector(entity.manualStrafingThrust);
+    const forwardDirection = normalizeVector(entity.direction, DEFAULT_RIGHT);
+    const horizontalDirection = normalizeVector(
+      buildPerpendicular(forwardDirection),
+      DEFAULT_RIGHT,
+    );
+    const verticalDirection = normalizeVector(
+      crossProduct(horizontalDirection, forwardDirection),
+      DEFAULT_WORLD_UP,
+    );
+    const acceleration = addVectors(
+      scaleVector(verticalDirection, thrust.x),
+      scaleVector(horizontalDirection, thrust.y),
+    );
+    const velocityDelta = scaleVector(acceleration, delta);
+    const positionDelta = scaleVector(acceleration, 0.5 * delta * delta);
+    entity.velocity = addVectors(entity.velocity, velocityDelta);
+    entity.position = addVectors(entity.position, positionDelta);
+    entity.direction = forwardDirection;
+    entity.lastMotionDebug = {
+      ...(entity.lastMotionDebug || {}),
+      manualStrafingThrust: summarizeVector(thrust),
+      manualStrafingAcceleration: summarizeVector(acceleration),
+      manualStrafingVelocityDelta: summarizeVector(velocityDelta),
+      manualStrafingPositionDelta: summarizeVector(positionDelta),
+    };
+    return magnitude(acceleration) > 0.000001;
   }
 
   function advanceManualFlightTarget(entity, deltaSeconds) {
@@ -1473,6 +1534,7 @@ function createDestinyMovementSimulator(deps = {}) {
     advanceManualFlightTarget,
     advanceMovement,
     advanceOrbitMovement,
+    applyManualStrafingThrust,
     applyCarbonAcceleration,
     applyDesiredVelocity,
     calculateCarbonFollowPlan,

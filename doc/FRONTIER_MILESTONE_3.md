@@ -9,7 +9,7 @@ runtime untouched.
 ## Current Baseline
 
 - Client version: `20.04`, cycle 6, MachoNet `489`
-- Current development build: `3465410`
+- Current development build: `3467658`
 - Game endpoint: `127.0.0.1:26000`
 - Secure local public gateway: `127.0.0.1:26103`
 - XMPP endpoint: `127.0.0.1:5222`
@@ -28,8 +28,8 @@ The current profile includes:
   creation, character selection, and returning-character login;
 - Frontier `CreateCharacterInSpace` provisioning a modular Creation hull with
   canonical hidden modules and rollback-safe initialization;
-- rendered ballpark bootstrap, undock, manual pitch and yaw, derived Creation
-  propulsion, native warp flight, and system transitions;
+- rendered ballpark bootstrap, undock, manual pitch, yaw, and strafe, derived
+  Creation propulsion, native warp flight, and system transitions;
 - modular Creation fitting, online/offline and effect state, fuel loading,
   capacitor use, action-bar abilities, transponders, beacons, and directional
   scanning contracts;
@@ -39,8 +39,11 @@ The current profile includes:
   online gate pairs;
 - prepared and replay-safe Smart Storage deposits and withdrawals with
   per-character partitions and persistent inventory state;
-- local system view, map rows, ship skins, XMPP chat, experience response
-  shapes, and secure local public-gateway services;
+- safe-logoff eligibility, revalidated countdown, exact-position persistence,
+  and canonical character-session cleanup;
+- local system view, route/search panels, live IFF Cairn markers, map rows,
+  ship skins, XMPP chat, module-less directional scanning, bounded shell and
+  experience response shapes, and secure local public-gateway services;
 - client-authored landscapes, dungeon geometry, Rift scenes, and deterministic
   site commands without inventing missing server-side spawn tables.
 
@@ -59,9 +62,11 @@ The staging workflow:
 3. writes a staged `common.ini` with `cryptoPack = Placebo`;
 4. patches the exact supported `blue.so` verifier instructions;
 5. enables station docking in the staged `code.ccp` archive;
-6. adds the EveJS CA to both embedded certificate bundles;
-7. refreshes the affected manifest hashes and ad-hoc signs nested binaries;
-8. records a stage marker and a timestamped backup of every changed file.
+6. enables only the exact-build Frontier UI gates backed by tested server
+   contracts;
+7. adds the EveJS CA to both embedded certificate bundles;
+8. refreshes the affected manifest hashes and ad-hoc signs nested binaries;
+9. records a stage marker and a timestamped backup of every changed file.
 
 The patcher refuses unknown builds, unexpected bytes, partial patches,
 unrecognized bytecode, or mismatched manifest state. It never modifies the
@@ -102,6 +107,33 @@ The broader fitting, storage, docking, and Heavy Gate interactions remain
 covered by automation and prior-build live acceptance; they should be repeated
 interactively before declaring full `3465410` gameplay parity.
 
+## Build 3467658 Validation
+
+The `3467658` update retained Frontier `20.04`, cycle 6, MachoNet `489`, the
+existing public protobuf contracts, and the same client-module surface. The
+macOS update completed the following checks:
+
+- the installed static snapshot validated with 24,026 systems, 113,253
+  landscape sites, 32,608 types, and 7,072 stargates;
+- `19/19` static-data tests and `187/187` Frontier server tests passed against
+  an isolated clone of the migrated `3467658` runtime;
+- the complete mutable SQLite world was migrated from `3463382` with matching
+  logical database hashes, while the old runtime remained intact;
+- the staged trust check confirmed the exact-build `blue.so`, docking, and
+  selected Frontier feature patches, both CA bundles, refreshed manifest
+  entries, Placebo configuration, and valid nested signatures;
+- the untouched retail `blue.so`, `code.ccp`, and `manifest.dat` retained their
+  recorded source hashes after staging;
+- a session-free client completed the `3467658` handshake, restored the
+  returning Creation in space, hydrated inventory, and connected to the game,
+  secure public-gateway, and XMPP endpoints;
+- no manifest, decrypt, certificate-chain, or unhandled-service error appeared
+  during the smoke run.
+
+One extracted localization row currently resolves dungeon `12535` to the raw
+message identifier `20002278` rather than `Accelerator Facility`. This is a
+client-data quality difference, not a protocol or startup blocker.
+
 ## Known Limits
 
 - Smart Storage validates the local compatibility transaction envelope but
@@ -110,7 +142,11 @@ interactively before declaring full `3465410` gameplay parity.
   but physical proximity remains client-enforced.
 - Assembly energy responses are wire-compatible but currently empty.
 - Experience and progression responses are shaped bootstrap data with zero
-  progression values.
+  progression values; unsupported crown, implant, reignment, and ascension
+  mutations fail explicitly rather than inventing rules.
+- The HUD system-information response is exact-shaped but remains empty until
+  danger tiers, remnant composition, substrate weights, and locator-potential
+  inputs are extracted from an authoritative client source.
 - Industry production, the market, Relay Lens, token mutation, storage-to-
   storage transfer, and several career or mission surfaces remain incomplete.
 - Rift scenes render, but full discovery, harvesting, depletion, and respawn

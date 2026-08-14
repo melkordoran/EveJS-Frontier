@@ -3959,6 +3959,11 @@ function applyCharacterToSession(session, charId, options = {}) {
   if (options.selectionEvent !== false) {
     clearDeferredDockedShipSessionChange(session);
     clearDockedFittingBootstrap(session);
+    // The transport can be reused for another character after Safe Logoff.
+    // A completion token is scoped to the character and ship that earned it
+    // and must never survive a fresh SelectCharacterID transition.
+    delete session._safeLogoffCompletion;
+    delete session._safeLogoffCompletedAtMs;
   }
 
   const charData = getCharacterRecord(charId);
@@ -4505,6 +4510,11 @@ function clearCharacterFromSession(session, options = {}) {
   session.rolesAtOther = 0n;
   session.corpAccountKey = null;
   session.corpaccountkey = null;
+  // Safe Logoff completion applies only to the character transition that is
+  // clearing now. Never let a reused transport session suppress emergency
+  // warp for a subsequently selected character.
+  delete session._safeLogoffCompletion;
+  delete session._safeLogoffCompletedAtMs;
 
   if (options.emitNotifications !== false) {
     const sessionChanges = {};

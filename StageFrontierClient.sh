@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BUILD="3465410"
+BUILD="3467658"
 SOURCE_ROOT="${HOME}/Library/Application Support/EVE Frontier"
 STAGED_BASE="${HOME}/Library/Application Support/evejs-frontier/macos/staged-client"
 CLEAN=false
@@ -17,7 +17,7 @@ Creates an isolated staged copy of the installed EVE Frontier client. The
 retail client and shared ResFiles cache are never modified.
 
 Options:
-  --build <number>       Installed Frontier build. Default: 3465410
+  --build <number>       Installed Frontier build. Default: 3467658
   --source-root <path>   Frontier launcher data root
   --staged-base <path>   Build-numbered staging base
   --clean                Replace this build's existing staged copy
@@ -71,6 +71,7 @@ STAGED_APP="${STAGED_CACHE}/stillness/EVE.app"
 STAGED_BUILD="${STAGED_APP}/Contents/Resources/build"
 CURRENT_LINK="${STAGED_BASE}/current"
 MARKER="${STAGED_ROOT}/.evejs-frontier-stage.json"
+STAGE_CREATED=false
 
 if [[ ! -d "$SOURCE_APP" || ! -d "$SOURCE_RESFILES" ]]; then
   echo "[evejs-frontier] Installed Frontier client is incomplete under: $SOURCE_ROOT" >&2
@@ -95,6 +96,15 @@ if [[ ! -d "$STAGED_APP" ]]; then
   mkdir -p "${STAGED_CACHE}/stillness"
   echo "[evejs-frontier] Copying the Frontier app into the isolated stage..."
   ditto "$SOURCE_APP" "$STAGED_APP"
+  STAGE_CREATED=true
+else
+  if [[ ! -f "$MARKER" ]]; then
+    echo "[evejs-frontier] Refusing to reuse an unrecognized stage: $STAGED_ROOT" >&2
+    exit 1
+  fi
+  bash "${SCRIPT_DIR}/PatchFrontierClientTrust.sh" \
+    --staged-root "$STAGED_ROOT" \
+    --preflight
 fi
 
 if [[ -L "${STAGED_CACHE}/ResFiles" ]]; then
@@ -118,7 +128,9 @@ xattr -dr com.apple.quarantine "$STAGED_APP" >/dev/null 2>&1 || true
 codesign --remove-signature "$STAGED_APP" >/dev/null 2>&1 || true
 
 BLUE_HASH="$(shasum -a 256 "${STAGED_BUILD}/bin64/blue.so" | awk '{print $1}')"
-cat > "$MARKER" <<EOF
+CODE_HASH="$(shasum -a 256 "${STAGED_BUILD}/code.ccp" | awk '{print $1}')"
+if [[ "$STAGE_CREATED" == true ]]; then
+  cat > "$MARKER" <<EOF
 {
   "format": "evejs-frontier-stage-v1",
   "build": $BUILD,
@@ -126,11 +138,13 @@ cat > "$MARKER" <<EOF
   "sourceApp": $(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$SOURCE_APP"),
   "blueSoSha256": "$BLUE_HASH",
   "blueSoPatchState": "unmodified",
+  "codeCcpSha256": "$CODE_HASH",
   "bootCryptoPack": "Placebo",
   "appBundleSignature": "outer-removed",
   "resFilesMode": "symlink"
 }
 EOF
+fi
 
 mkdir -p "$STAGED_BASE"
 if [[ -L "$CURRENT_LINK" ]]; then
@@ -152,6 +166,9 @@ if [[ "$PATCH_CLIENT_TRUST" == true ]]; then
   echo "[evejs-frontier] blue.so: manifest verifier patched ($BLUE_HASH)"
   echo "[evejs-frontier] XMPP CA: installed in both embedded client bundles"
   echo "[evejs-frontier] Station docking: enabled in staged code.ccp"
+  if [[ "$BUILD" == "3467658" ]]; then
+    echo "[evejs-frontier] Tested Frontier UI/gameplay features: enabled in staged code.ccp"
+  fi
 else
   echo "[evejs-frontier] blue.so: unmodified ($BLUE_HASH)"
 fi

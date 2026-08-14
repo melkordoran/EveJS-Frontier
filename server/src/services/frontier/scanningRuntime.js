@@ -4,7 +4,8 @@
  * Frontier directional scanner runtime (module 95322, behavior
  * "directional_scan", capability "scanning").
  *
- * Client contract (build 3455996 bytecode):
+ * Client contract (build 3467658 bytecode; the Creation path is unchanged
+ * from 3455996):
  * - `creation.activate_ability(ship, module, "directional_scan",
  *   scan_angle=<degrees>, scan_direction=<vec3>)`; the adapter converts its
  *   internal radians with math.degrees() before sending. The result dict is
@@ -13,8 +14,9 @@
  *   .origin / .duration), so the payload must be an attribute-style object
  *   (util.KeyVal), not a plain dict.
  * - `resolved` maps ball_id -> filetime DELTA (the client applies
- *   datetimeutils.filetime_delta_to_timedelta), and `duration` is likewise a
- *   filetime delta consumed as a timedelta.
+ *   datetimeutils.filetime_delta_to_timedelta). `duration` is returned as an
+ *   actual datetime.timedelta because the client passes it directly into
+ *   ScanPulsePhase and performs datetime arithmetic with it.
  * - `added`/`removed` are dict[int, tuple|None] keyed by ball id.
  * - `updated_scans` entries are CombinedScanResult states:
  *   (center, radius, scan_id, distance_range, estimated_number,
@@ -66,7 +68,7 @@ const SIGNATURE_TYPE_THERMAL = 3;
 const SIGNATURE_TYPE_MULTIPLIER_ATTRIBUTES = Object.freeze([
   [SIGNATURE_TYPE_GRAVIMETRIC, "ActiveScanGravStrengthMulti"],
   [SIGNATURE_TYPE_ELECTROMAGNETIC, "ActiveScanEMStrengthMulti"],
-  [SIGNATURE_TYPE_THERMAL, " ActiveScanThermalStrengthMulti"],
+  [SIGNATURE_TYPE_THERMAL, "ActiveScanThermalStrengthMulti"],
 ]);
 
 function toFiniteNumber(value, fallback = 0) {

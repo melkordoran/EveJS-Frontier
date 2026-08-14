@@ -147,6 +147,41 @@ const CONFIG_ENTRY_DEFINITIONS = [
     validValues: "true or false.",
   },
   {
+    key: "safeLogoffEnabled",
+    defaultValue: true,
+    envVar: "EVEJS_SAFE_LOGOFF_ENABLED",
+    envType: "boolean",
+    description: [
+      "Enables the authoritative in-space Safe Logoff flow and advertises character-logoff support to the client.",
+      "Disable this only while isolating session-transition or space-runtime regressions.",
+    ],
+    validValues: "true or false.",
+  },
+  {
+    key: "safeLogoffCountdownSeconds",
+    defaultValue: 30,
+    envVar: "EVEJS_SAFE_LOGOFF_COUNTDOWN_SECONDS",
+    envType: "number",
+    minValue: 1,
+    maxValue: 300,
+    description: [
+      "Authoritative Safe Logoff countdown duration before the client returns to character selection or exits.",
+      "The live-client default is 30 seconds.",
+    ],
+    validValues: "Integer seconds from 1 through 300.",
+  },
+  {
+    key: "strafeEnabled",
+    defaultValue: true,
+    envVar: "EVEJS_STRAFE_ENABLED",
+    envType: "boolean",
+    description: [
+      "Enables Frontier vertical and horizontal manual-flight strafing and advertises the strafe_enabled client flag.",
+      "The server clamps and simulates the requested lateral thrust authoritatively.",
+    ],
+    validValues: "true or false.",
+  },
+  {
     key: "wormholesEnabled",
     defaultValue: true,
     envVar: "EVEJS_WORMHOLES_ENABLED",

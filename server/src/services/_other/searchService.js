@@ -1,4 +1,5 @@
 const path = require("path");
+const fs = require("fs");
 
 const BaseService = require(path.join(__dirname, "../baseService"));
 const database = require(path.join(__dirname, "../../gameStore"));
@@ -50,6 +51,50 @@ const MAX_RESULT_COUNT = 500;
 const STATIC_QUERY_CACHE_LIMIT = 512;
 const staticSearchIndexCache = new Map();
 const staticQueryResultCache = new Map();
+const frontierLocationRowsCache = new Map();
+
+function readFrontierLocationRows(fileName) {
+  const staticRoot = String(process.env.EVEJS_STATIC_JSONL_ROOT || "").trim();
+  if (!staticRoot) {
+    return [];
+  }
+  const filePath = path.join(path.resolve(staticRoot), fileName);
+  if (frontierLocationRowsCache.has(filePath)) {
+    return frontierLocationRowsCache.get(filePath);
+  }
+  let rows = [];
+  try {
+    rows = fs.readFileSync(filePath, "utf8")
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        try {
+          return JSON.parse(line);
+        } catch (_error) {
+          return null;
+        }
+      })
+      .filter(Boolean);
+  } catch (_error) {
+    rows = [];
+  }
+  frontierLocationRowsCache.set(filePath, rows);
+  return rows;
+}
+
+function getLocalizedName(value) {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value && typeof value === "object") {
+    if (typeof value.en === "string") {
+      return value.en;
+    }
+    return Object.values(value).find((candidate) => typeof candidate === "string") || "";
+  }
+  return "";
+}
 
 function extractKwargValue(kwargs, key, fallback = undefined) {
   if (!kwargs) {
@@ -96,13 +141,36 @@ function appendMapListEntry(map, key, value) {
 }
 
 function getStaticGroupSourceRows(groupID) {
-  switch (Number(groupID) || 0) {
+  const normalizedGroupID = Number(groupID) || 0;
+  const world = [
+    RESULT_TYPE.CONSTELLATION,
+    RESULT_TYPE.SOLAR_SYSTEM,
+    RESULT_TYPE.REGION,
+    RESULT_TYPE.STATION,
+  ].includes(normalizedGroupID)
+    ? worldData.ensureLoaded()
+    : null;
+  switch (normalizedGroupID) {
     case RESULT_TYPE.SOLAR_SYSTEM:
-      return worldData.ensureLoaded().solarSystems;
+      return world.solarSystems;
     case RESULT_TYPE.STATION:
+      return world.stations;
     case RESULT_TYPE.CONSTELLATION:
+      return [
+        ...readFrontierLocationRows("mapConstellations.jsonl"),
+        ...world.stations,
+        ...world.solarSystems,
+      ];
     case RESULT_TYPE.REGION:
-      return worldData.ensureLoaded().stations;
+      // The isolated Frontier snapshot is the authority for complete authored
+      // names.  Station rows preserve compatibility with older generated
+      // stores, and system rows ensure every ID remains indexed if the raw
+      // snapshot is unavailable.
+      return [
+        ...readFrontierLocationRows("mapRegions.jsonl"),
+        ...world.stations,
+        ...world.solarSystems,
+      ];
     case RESULT_TYPE.ITEM_TYPE:
       return readStaticRows(TABLE.ITEM_TYPES);
     default:
@@ -110,21 +178,45 @@ function getStaticGroupSourceRows(groupID) {
   }
 }
 
-function getStaticGroupEntryName(groupID, row) {
+function getStaticGroupEntryNames(groupID, row) {
+  const id = getStaticGroupEntryID(groupID, row);
+  const names = [];
   switch (Number(groupID) || 0) {
     case RESULT_TYPE.SOLAR_SYSTEM:
-      return String(row && row.solarSystemName || "");
+      names.push(row && row.solarSystemName);
+      break;
     case RESULT_TYPE.STATION:
-      return String(row && (row.stationName || row.itemName) || "");
+      names.push(row && (row.stationName || row.itemName));
+      break;
     case RESULT_TYPE.CONSTELLATION:
-      return String(row && row.constellationName || "");
+      names.push(getLocalizedName(row && (row.constellationName || row.name)));
+      // Frontier's authored constellation labels use this exact form.  It is
+      // also the only authoritative label available for constellations that
+      // contain no station in the extracted data.
+      if (id > 0) {
+        names.push(`C-${id}`);
+      }
+      break;
     case RESULT_TYPE.REGION:
-      return String(row && row.regionName || "");
+      names.push(getLocalizedName(row && (row.regionName || row.name)));
+      // Do not fabricate an authored region name when the current extraction
+      // has none.  Numeric lookup still makes every region addressable.
+      if (id > 0) {
+        names.push(String(id));
+      }
+      break;
     case RESULT_TYPE.ITEM_TYPE:
-      return String(row && (row.name || row.typeName) || "");
+      names.push(row && (row.name || row.typeName));
+      break;
     default:
-      return "";
+      break;
   }
+
+  return [...new Set(
+    names
+      .map((name) => String(name || "").trim())
+      .filter(Boolean),
+  )];
 }
 
 function getStaticGroupEntryID(groupID, row) {
@@ -144,25 +236,28 @@ function getStaticGroupEntryID(groupID, row) {
   }
 }
 
-function buildStaticSearchIndex(groupID) {
-  const rows = getStaticGroupSourceRows(groupID);
+function buildStaticSearchIndexFromRows(groupID, rows) {
   if (!rows) {
     return null;
   }
 
   const exactRawNameMap = new Map();
   const exactCollapsedNameMap = new Map();
-  const seenEntryIDs = new Set();
-  const entries = rows
-    .map((row) => {
-      const id = getStaticGroupEntryID(groupID, row);
-      const name = getStaticGroupEntryName(groupID, row);
+  const seenAliases = new Set();
+  const entries = [];
+  for (const row of rows) {
+    const id = getStaticGroupEntryID(groupID, row);
+    if (!id) {
+      continue;
+    }
+    for (const name of getStaticGroupEntryNames(groupID, row)) {
       const rawName = normalizeSearchString(name);
       const collapsedName = collapseSearchString(name);
-      if (!id || !name || !collapsedName || seenEntryIDs.has(id)) {
-        return null;
+      const aliasKey = `${id}\u0000${rawName}`;
+      if (!collapsedName || seenAliases.has(aliasKey)) {
+        continue;
       }
-      seenEntryIDs.add(id);
+      seenAliases.add(aliasKey);
       const entry = {
         id,
         rawName,
@@ -170,15 +265,23 @@ function buildStaticSearchIndex(groupID) {
       };
       appendMapListEntry(exactRawNameMap, rawName, id);
       appendMapListEntry(exactCollapsedNameMap, collapsedName, id);
-      return entry;
-    })
-    .filter(Boolean);
+      entries.push(entry);
+    }
+  }
 
-  const index = {
+  return {
     entries,
     exactRawNameMap,
     exactCollapsedNameMap,
   };
+}
+
+function buildStaticSearchIndex(groupID) {
+  const rows = getStaticGroupSourceRows(groupID);
+  const index = buildStaticSearchIndexFromRows(groupID, rows);
+  if (!index) {
+    return null;
+  }
   staticSearchIndexCache.set(Number(groupID) || 0, index);
   return index;
 }
@@ -276,7 +379,14 @@ function searchStaticGroup(groupID, search, exactMode) {
         }
         substringMatches.push(entry.id);
       }
-      results = [...exactMatches, ...prefixMatches, ...substringMatches];
+      const seen = new Set();
+      results = [...exactMatches, ...prefixMatches, ...substringMatches].filter((id) => {
+        if (!id || seen.has(id)) {
+          return false;
+        }
+        seen.add(id);
+        return true;
+      });
       break;
     }
   }
@@ -394,6 +504,7 @@ function searchGroup(groupID, search, exactMode, options = {}) {
 function clearSearchCaches() {
   staticSearchIndexCache.clear();
   staticQueryResultCache.clear();
+  frontierLocationRowsCache.clear();
 }
 
 class SearchService extends BaseService {
@@ -443,6 +554,9 @@ class SearchService extends BaseService {
 
 module.exports = SearchService;
 module.exports._testing = {
+  buildStaticSearchIndexFromRows,
   clearSearchCaches,
+  getStaticGroupEntryNames,
+  getStaticGroupSourceRows,
   searchStaticGroup,
 };

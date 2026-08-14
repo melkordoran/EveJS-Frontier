@@ -40,9 +40,6 @@ const {
   boardSpaceShip,
 } = require(path.join(__dirname, "../../space/transitions"));
 const {
-  disconnectCharacterSession,
-} = require(path.join(__dirname, "../_shared/sessionDisconnect"));
-const {
   getDockedLocationID,
   isDockedSession,
 } = require(path.join(__dirname, "../structure/structureLocation"));
@@ -116,13 +113,16 @@ const {
 const {
   normalizeShipNameLabel,
 } = require(path.join(__dirname, "./shipNameUtils"));
+const {
+  beginSafeLogoff,
+  cancelSafeLogoff,
+  evaluateSafeLogoffConditions,
+  isSafeLogoffEnabled,
+} = require(path.join(__dirname, "./safeLogoffRuntime"));
 const DBTYPE_I4 = 0x03;
 const DBTYPE_R8 = 0x05;
 const DBTYPE_BOOL = 0x0b;
 const DBTYPE_I8 = 0x14;
-const FILETIME_TICKS_PER_MS = 10000n;
-const FILETIME_EPOCH_OFFSET = 116444736000000000n;
-const SAFE_LOGOFF_TIMER_GRACE_TICKS = 10000000n;
 const DEFAULT_FITTING_REWARD_ICON = "res:/UI/Texture/classes/Fitting/tabFittings.png";
 const EXPECTED_SCOOP_REFUSALS = new Set([
   "ITEM_NOT_MOBILE_DEPOT",
@@ -149,10 +149,6 @@ const INSTANCE_ROW_DESCRIPTOR_COLUMNS = [
   ["shieldCharge", DBTYPE_R8],
   ["incapacitated", DBTYPE_BOOL],
 ];
-
-function buildCurrentFileTime() {
-  return BigInt(Date.now()) * FILETIME_TICKS_PER_MS + FILETIME_EPOCH_OFFSET;
-}
 
 function normalizeMethodName(rawMethodName) {
   if (typeof rawMethodName === "string") {
@@ -1885,9 +1881,23 @@ class ShipService extends BaseService {
       `[Ship] SafeLogoff requested for char=${session ? session.characterID : "?"} ship=${session ? this._getShipID(session) : "?"}`,
     );
 
-    // The live client treats the SafeLogoff response as an iterable of failed
-    // condition labels. Returning an empty list means "all checks passed".
-    return [];
+    if (!isSafeLogoffEnabled()) {
+      throwWrappedUserError("CustomNotify", {
+        notify: "Safe Logoff is disabled by server configuration.",
+      });
+    }
+
+    // The live client treats this response as an iterable of localization
+    // labels. The countdown notification must only follow an empty response.
+    return evaluateSafeLogoffConditions(session);
+  }
+
+  Handle_AbortSafeLogoff(args, session, kwargs) {
+    const cancelled = cancelSafeLogoff(session, { clearCompletion: true });
+    log.info(
+      `[Ship] AbortSafeLogoff char=${session ? session.characterID : "?"} active=${cancelled}`,
+    );
+    return null;
   }
 
   Handle_MachoResolveObject(args, session, kwargs) {
@@ -1978,48 +1988,6 @@ class ShipService extends BaseService {
     return Array.isArray(context.result[1]) ? context.result[1] : null;
   }
 
-  _emitInstantSafeLogoffNotifications(session) {
-    if (!session || typeof session.sendNotification !== "function") {
-      return false;
-    }
-
-    const safeLogoffTime = buildCurrentFileTime() + SAFE_LOGOFF_TIMER_GRACE_TICKS;
-    session.sendNotification("OnSafeLogoffTimerStarted", "clientID", [
-      safeLogoffTime,
-    ]);
-    session.sendNotification("OnSafeLogoffActivated", "clientID", []);
-    return true;
-  }
-
-  _completeInstantSafeLogoff(session, methodName) {
-    const characterID = Number(session && session.characterID) || 0;
-    if (characterID <= 0) {
-      return;
-    }
-
-    const notificationsSent = this._emitInstantSafeLogoffNotifications(session);
-    if (!notificationsSent) {
-      log.warn(
-        `[Ship] SafeLogoff could not notify client for char=${characterID}; continuing with server-side session clear`,
-      );
-    }
-
-    const disconnectResult = disconnectCharacterSession(session, {
-      broadcast: true,
-      clearSession: true,
-    });
-    if (!disconnectResult.success) {
-      log.warn(
-        `[Ship] SafeLogoff disconnect failed for char=${characterID}: ${disconnectResult.errorMsg}`,
-      );
-      return;
-    }
-
-    log.info(
-      `[Ship] SafeLogoff completed for char=${characterID} via ${methodName}`,
-    );
-  }
-
   afterCallResponse(methodName, session, context = {}) {
     if (!this._isSafeLogoffRequest(methodName, context)) {
       return;
@@ -2033,7 +2001,14 @@ class ShipService extends BaseService {
       return;
     }
 
-    this._completeInstantSafeLogoff(session, methodName);
+    const startResult = beginSafeLogoff(session, {
+      notifyFailure: true,
+    });
+    if (!startResult.success) {
+      log.info(
+        `[Ship] SafeLogoff countdown not started char=${session ? session.characterID : "?"} via=${methodName} reason=${startResult.errorMsg || "UNKNOWN"}`,
+      );
+    }
   }
 
   callMethod(method, args, session, kwargs) {

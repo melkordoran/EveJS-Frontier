@@ -26,6 +26,7 @@ function clearTrackingState(entity) {
   entity.manualYawRate = 0;
   entity.manualPitchVelocity = 0;
   entity.manualYawVelocity = 0;
+  entity.manualStrafingThrust = { x: 0, y: 0, z: 0 };
   entity.angularVelocity = { x: 0, y: 0, z: 0 };
 }
 

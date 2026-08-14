@@ -137,6 +137,7 @@ function createNativeSubwarpController(deps = {}) {
       NATIVE_SUBWARP_MODE_NAMES.includes(mode) &&
       !entity.pendingWarp &&
       !entity.warpState &&
+      entity.manualFlightActive !== true &&
       !entity.sessionlessWarpIngress,
     );
   }

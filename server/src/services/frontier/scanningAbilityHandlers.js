@@ -7,9 +7,10 @@
  * - The client reads `result.get("scan_response")` from the activate_ability
  *   return value, then accesses the response BY ATTRIBUTE, so the response is
  *   marshalled as util.KeyVal rather than a plain dict.
- * - `duration` and every `resolved` value are FILETIME DELTAS (100 ns
- *   units); the client converts them with
- *   datetimeutils.filetime_delta_to_timedelta.
+ * - Every `resolved` value is a FILETIME DELTA (100 ns units), which the
+ *   client converts with datetimeutils.filetime_delta_to_timedelta.  In
+ *   contrast, `duration` is passed directly into ScanPulsePhase and must
+ *   already be a datetime.timedelta instance.
  * - `added`/`removed` are dicts keyed by ball id with a tuple|None value;
  *   we send None (no per-ball payload is read for directional scans).
  * - `updated_scans` are CombinedScanResult states: (center, radius, scan_id,
@@ -44,6 +45,61 @@ function toInt(value, fallback = 0) {
 function millisecondsToFiletimeDelta(milliseconds) {
   return BigInt(Math.max(0, Math.round(Number(milliseconds) || 0))) *
     FILETIME_UNITS_PER_MS;
+}
+
+function encodeProtocol2Integer(value) {
+  const numeric = Math.trunc(Number(value));
+  if (!Number.isSafeInteger(numeric)) {
+    throw new RangeError("timedelta component exceeds the supported pickle integer range");
+  }
+  if (numeric >= 0 && numeric <= 0xff) {
+    return Buffer.from([0x4b, numeric]); // BININT1
+  }
+  if (numeric >= 0 && numeric <= 0xffff) {
+    const encoded = Buffer.alloc(3);
+    encoded[0] = 0x4d; // BININT2
+    encoded.writeUInt16LE(numeric, 1);
+    return encoded;
+  }
+  if (numeric >= -0x80000000 && numeric <= 0x7fffffff) {
+    const encoded = Buffer.alloc(5);
+    encoded[0] = 0x4a; // BININT
+    encoded.writeInt32LE(numeric, 1);
+    return encoded;
+  }
+  throw new RangeError("timedelta component exceeds the supported pickle integer range");
+}
+
+/**
+ * Build the exact protocol-2 reduction emitted by Python 3.12 for
+ * datetime.timedelta(days, seconds, microseconds). The cPicked Macho opcode
+ * invokes pickle.loads on the client, yielding a real timedelta rather than a
+ * tick integer that would fail `datetime + duration` in Scanner.update().
+ */
+function buildPythonTimedeltaPayload(milliseconds) {
+  const numericMilliseconds = Number(milliseconds);
+  const totalMicroseconds = Number.isFinite(numericMilliseconds)
+    ? Math.max(0, Math.round(numericMilliseconds * 1000))
+    : 0;
+  const microsecondsPerDay = 86_400_000_000;
+  const microsecondsPerSecond = 1_000_000;
+  const days = Math.floor(totalMicroseconds / microsecondsPerDay);
+  const dayRemainder = totalMicroseconds - (days * microsecondsPerDay);
+  const seconds = Math.floor(dayRemainder / microsecondsPerSecond);
+  const microseconds = dayRemainder - (seconds * microsecondsPerSecond);
+
+  return {
+    type: "cpicked",
+    data: Buffer.concat([
+      Buffer.from([0x80, 0x02]), // PROTO 2
+      Buffer.from("cdatetime\ntimedelta\nq\0", "latin1"),
+      encodeProtocol2Integer(days),
+      encodeProtocol2Integer(seconds),
+      encodeProtocol2Integer(microseconds),
+      Buffer.from([0x87, 0x71, 0x01, 0x52, 0x71, 0x02, 0x2e]),
+      // TUPLE3, BINPUT 1, REDUCE, BINPUT 2, STOP
+    ]),
+  };
 }
 
 function getSpaceRuntime() {
@@ -100,7 +156,7 @@ function buildCombinedScanState(result) {
 function buildScanResponse(scan) {
   return buildKeyVal([
     ["origin", scan.origin],
-    ["duration", millisecondsToFiletimeDelta(scan.durationMs)],
+    ["duration", buildPythonTimedeltaPayload(scan.durationMs)],
     [
       "added",
       buildDict(scan.added.map((scanId) => [scanId, null])),
@@ -190,6 +246,7 @@ function registerScanningAbilityHandlers() {
 }
 
 module.exports = {
+  buildPythonTimedeltaPayload,
   buildScanResponse,
   millisecondsToFiletimeDelta,
   registerScanningAbilityHandlers,

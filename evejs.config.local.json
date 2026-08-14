@@ -78,6 +78,27 @@
 
   "localChatAuthorityEnabled": true,
 
+  // Enables the authoritative in-space Safe Logoff flow and advertises character-logoff support to the client.
+  // Disable this only while isolating session-transition or space-runtime regressions.
+  // Valid values: true or false.
+  // Default: true.
+
+  "safeLogoffEnabled": true,
+
+  // Authoritative Safe Logoff countdown duration before the client returns to character selection or exits.
+  // The live-client default is 30 seconds.
+  // Valid values: Integer seconds from 1 through 300.
+  // Default: 30.
+
+  "safeLogoffCountdownSeconds": 30,
+
+  // Enables Frontier vertical and horizontal manual-flight strafing and advertises the strafe_enabled client flag.
+  // The server clamps and simulates the requested lateral thrust authoritatively.
+  // Valid values: true or false.
+  // Default: true.
+
+  "strafeEnabled": true,
+
   // Enables the live wormhole runtime, wormholeMgr jump service, and automatic static wormhole seeding for eligible systems.
   // Disable only when isolating unrelated space-runtime regressions.
   // Valid values: true or false.

@@ -31,6 +31,9 @@ const structureState = require(path.join(
   __dirname,
   "../structure/structureState",
 ));
+const {
+  buildJumpBridgeAccessPayload,
+} = require(path.join(__dirname, "../structure/structureDirectoryService"));
 const planetOrbitalState = require(path.join(
   __dirname,
   "../planet/planetOrbitalState",
@@ -564,6 +567,26 @@ class MapService extends BaseService {
     log.debug("[MapService] GetEdencomMinorVictorySystems called");
 
     return buildList([...EDENCOM_MINOR_VICTORY_SYSTEMS]);
+  }
+
+  Handle_GetEdencomAvoidanceSystems() {
+    // ClientPathfinderService asks the map service for a single avoidance set
+    // while constructing routes.  Retail's two EDENCOM classifications are
+    // both avoidance systems; keep the result stable and duplicate-free.
+    const systemIDs = [...new Set([
+      ...EDENCOM_FORTRESS_SYSTEMS,
+      ...EDENCOM_MINOR_VICTORY_SYSTEMS,
+    ])].sort((left, right) => left - right);
+    log.debug(`[MapService] GetEdencomAvoidanceSystems count=${systemIDs.length}`);
+    return buildList(systemIDs);
+  }
+
+  Handle_GetJumpBridgesWithMyAccess(args, session) {
+    // The Frontier pathfinder calls this on mapService (not on the structure
+    // directory surface used by newer retail clients).  Share the same
+    // authority/pairing implementation so access decisions cannot drift.
+    log.debug("[MapService] GetJumpBridgesWithMyAccess called");
+    return buildJumpBridgeAccessPayload(session);
   }
 
   Handle_GetIncursionGlobalReport() {

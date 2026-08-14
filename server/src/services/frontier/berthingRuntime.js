@@ -670,6 +670,16 @@ function ejectOccupiedShip(session, hostAssemblyID, dependencies = {}) {
   );
 }
 
+function hasActiveContractForHostAssembly(hostAssemblyID) {
+  const numericHostID = toInt(hostAssemblyID, 0);
+  if (numericHostID <= 0) {
+    return false;
+  }
+  return [...contractsByCharacterID.values()].some(
+    (contract) => toInt(contract && contract.hostAssemblyID, 0) === numericHostID,
+  );
+}
+
 module.exports = {
   BERTHING_PHASE_APPROACHING,
   BERTHING_PHASE_BERTHED,
@@ -679,6 +689,8 @@ module.exports = {
   completeBerth,
   ejectOccupiedShip,
   getContractForSession,
+  hasActiveContractForHostAssembly,
+  readBerthHostIDFromCustomInfo,
   undockBerth,
   _testing: {
     buildSmartHangarDefinitions,

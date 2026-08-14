@@ -646,3 +646,4 @@ class StructureDirectoryService extends BaseService {
 }
 
 module.exports = StructureDirectoryService;
+module.exports.buildJumpBridgeAccessPayload = buildJumpBridgeAccessPayload;

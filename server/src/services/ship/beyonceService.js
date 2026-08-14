@@ -10,6 +10,7 @@ const {
   extractDictEntries,
   normalizeNumber,
   normalizeText,
+  unwrapMarshalValue,
 } = require(path.join(__dirname, "../_shared/serviceHelpers"));
 const {
   buildCachedMethodCallResult,
@@ -2627,6 +2628,24 @@ class BeyonceService extends BaseService {
       `[Beyonce] CmdSetPitch char=${session && session.characterID} pitch=${pitch}`,
     );
     spaceRuntime.setPitch(session, pitch);
+    return null;
+  }
+
+  Handle_CmdSetStrafingThrust(args, session) {
+    const requested = unwrapMarshalValue(args && args[0]);
+    const thrust = Array.isArray(requested)
+      ? [
+          normalizeNumber(requested[0], 0),
+          normalizeNumber(requested[1], 0),
+          0,
+        ]
+      : [0, 0, 0];
+    log.info(
+      `[Beyonce] CmdSetStrafingThrust char=${session && session.characterID} thrust=(${thrust.join(", ")}) enabled=${config.strafeEnabled !== false}`,
+    );
+    if (config.strafeEnabled !== false) {
+      spaceRuntime.setStrafingThrust(session, thrust);
+    }
     return null;
   }
 

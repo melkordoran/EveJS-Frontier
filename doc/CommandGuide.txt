@@ -10,6 +10,7 @@ Live command sources
 - server/src/services/sovereignty/sovChatCommands.js
 - server/src/services/sovereignty/sovAutoCommands.js
 - server/src/services/superweapons/superweaponCommands.js
+- server/src/services/frontier/assemblyChatCommands.js
 
 How to read this guide
 - All commands are slash commands typed in chat.
@@ -174,6 +175,78 @@ Examples:
 - /tidi
 - /tidi 0.5
 - /tidi auto
+
+
+FRONTIER SMART ASSEMBLY ADMINISTRATION
+--------------------------------------
+
+/assembly help
+/assemblies help
+What they do: Show the Smart Assembly command family. /assemblies is an alias.
+Parameters: none.
+Example: /assembly help
+
+/assembly types [all|published|hidden] [name|typeID]
+What it does: Lists constructible Smart Assembly types, including unpublished client types when hidden or all is selected.
+Examples:
+- /assembly types published
+- /assembly types hidden turret
+- /assembly types all "Heavy Storage"
+
+/assembly list [mine|system|all]
+What it does: Lists persisted Smart Assemblies owned by you, in the current system, or globally.
+Notes: The all scope requires an elevated account role.
+Examples:
+- /assembly list mine
+- /assembly list system
+- /assembly list all
+
+/assembly info <itemID|nearest>
+What it does: Shows an assembly's type, owner, system, state, position, publication status, and gate destination.
+Examples:
+- /assembly info 9988400001511
+- /assembly info nearest
+
+/assembly spawn <name|typeID> [here|ahead=<meters>|offset=x,y,z|pos=x,y,z] [state=default|offline|online]
+What it does: Instantly creates a completed Smart Assembly without consuming construction materials.
+Notes:
+- Requires an elevated account role and an active ship in space.
+- Names with spaces may be quoted.
+- Hidden types are supported.
+- Smart Gates cannot be spawned online before linking; spawn them offline, link them, then set them online.
+Examples:
+- /assembly spawn "Heavy Storage" ahead=1000 state=offline
+- /assembly spawn 92404 offset=500,0,0
+
+/assembly state <itemID> <offline|online>
+/assembly online <itemID>
+/assembly offline <itemID>
+What they do: Change a completed assembly's operational state.
+Notes: Requires an elevated account role. Gate state changes preserve reciprocal-link checks.
+Examples:
+- /assembly state 9988400001511 offline
+- /assembly online 9988400001511
+
+/assembly link <sourceGateID> <destinationGateID>
+/assembly unlink <gateID>
+What they do: Create or clear a reciprocal Heavy/Mini Gate link.
+Notes: Both gates must be offline, compatible, and owned by the same character. Catapults are not reciprocal gates.
+Examples:
+- /assembly link 9988400001511 9988400001771
+- /assembly unlink 9988400001511
+
+/assembly complete <constructionSiteID>
+What it does: Completes a construction site immediately once all required materials have been deposited.
+Notes: This bypasses the timer, not the material requirement. Requires an elevated account role.
+Example: /assembly complete 9988400004000
+
+/assembly remove <itemID> confirm
+What it does: Permanently removes an offline or under-construction Smart Assembly.
+Notes:
+- Requires the literal confirm argument and an elevated account role.
+- Refuses linked gates, non-empty storage, fueled Network Nodes, and occupied berths.
+- Inventory contents are never recursively deleted by this command.
+Example: /assembly remove 9988400004000 confirm
 
 
 CHARACTER, SKILLS, CURRENCY, CORP, ALLIANCE, AND LOGOS

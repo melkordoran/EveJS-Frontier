@@ -328,6 +328,7 @@ function createDestinyPayloadSummary(deps = {}) {
       case "SetBallPosition":
       case "SetBallVelocity":
       case "SetMaxAngularVelocity":
+      case "SetStrafingThrust":
         if (getPrimaryEntityID(payload) === null) {
           return null;
         }

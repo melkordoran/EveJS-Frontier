@@ -20351,6 +20351,7 @@ const movementManualFlightCommands = createMovementManualFlightCommands({
 
 const {
   setPitch: dispatchSetPitch,
+  setStrafingThrust: dispatchSetStrafingThrust,
   setYawRate: dispatchSetYawRate,
 } = movementManualFlightCommands;
 
@@ -38042,6 +38043,28 @@ class SolarSystemScene {
     return result;
   }
 
+  setStrafingThrust(session, thrust) {
+    const entity = this.getShipEntityForSession(session);
+    if (
+      !entity ||
+      entity.mode === "WARP" ||
+      entity.pendingDock ||
+      hasPendingPilotWarpLanding(session, entity) ||
+      isShipMovementLockedByRuntime(entity, this.getCurrentSimTimeMs())
+    ) {
+      return false;
+    }
+    this.cancelStargateJumpCloakBeforePilotCommand(session, "movement");
+    const result = dispatchSetStrafingThrust(this, session, thrust);
+    this.cancelStargateJumpCloakAfterCommand(session, result, "movement");
+    if (result) {
+      this.retireInactiveFleetWarpCommandAssociation(entity);
+      this.processSessionShipCloakProximityDecloak(session);
+      this.flushDirectDestinyNotificationBatchIfIdle();
+    }
+    return result;
+  }
+
   setYawRate(session, yawRate) {
     const entity = this.getShipEntityForSession(session);
     if (
@@ -42430,6 +42453,11 @@ class SpaceRuntime {
   setPitch(session, pitch) {
     const scene = this.getSceneForSession(session);
     return scene ? scene.setPitch(session, pitch) : false;
+  }
+
+  setStrafingThrust(session, thrust) {
+    const scene = this.getSceneForSession(session);
+    return scene ? scene.setStrafingThrust(session, thrust) : false;
   }
 
   setYawRate(session, yawRate) {

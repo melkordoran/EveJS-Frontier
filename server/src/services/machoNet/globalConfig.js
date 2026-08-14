@@ -104,6 +104,11 @@ function buildGlobalConfigEntries(runtimeConfig = getRuntimeConfig()) {
       "eve-local-chat-authority",
       runtimeConfig.localChatAuthorityEnabled !== false ? 1 : 0,
     ],
+    [
+      "enable_logoff_to_character_selection",
+      runtimeConfig.safeLogoffEnabled !== false ? 1 : 0,
+    ],
+    ["strafe_enabled", runtimeConfig.strafeEnabled !== false ? "1" : "0"],
     ...buildClientGlobalConfigEntries(),
   ];
 

@@ -227,6 +227,7 @@ class MachoNetService extends BaseService {
         ["planetOrbitalRegistryBroker", "solarsystem2"],
         ["posMgr", "solarsystem2"],
         ["scanMgr", null],
+        ["scanningService", null],
         ["miningScanMgr", null],
         ["characterMiningLedger", null],
         ["corpMiningLedger", null],

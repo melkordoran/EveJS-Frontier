@@ -39,6 +39,7 @@ const KNOWN_PAYLOAD_NAMES = Object.freeze([
   "SetPitch",
   "SetSpeedFraction",
   "SetState",
+  "SetStrafingThrust",
   "SetYawRate",
   "Stop",
   "TerminalPlayDestructionEffect",
@@ -62,6 +63,7 @@ const MOVEMENT_CONTRACT_PAYLOAD_NAMES = Object.freeze([
   "SetPitch",
   "Stop",
   "SetSpeedFraction",
+  "SetStrafingThrust",
   "SetYawRate",
   "SetBallVelocity",
 ]);
@@ -112,6 +114,7 @@ const PAYLOAD_ARGUMENT_COUNTS = Object.freeze({
   SetPitch: 2,
   SetSpeedFraction: 2,
   SetState: 1,
+  SetStrafingThrust: 4,
   SetYawRate: 2,
   Stop: 1,
   TerminalPlayDestructionEffect: 2,
