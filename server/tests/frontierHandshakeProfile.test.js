@@ -84,6 +84,7 @@ const SmartAssemblyService = require(
 );
 const BeyonceService = require("../src/services/ship/beyonceService");
 const DogmaService = require("../src/services/dogma/dogmaService");
+const ShipService = require("../src/services/ship/shipService");
 const frontierSpaceRuntime = require("../src/space/runtime");
 const CairnService = require("../src/services/frontier/cairnService");
 const IffMapService = require("../src/services/frontier/iffMapService");
@@ -589,10 +590,34 @@ test("Frontier startup services return indexable empty/default contracts", () =>
     experience.Handle_get_memories_from_shell(),
     { compatibilityProfile: "frontier" },
   ));
-  assert.deepEqual(new StatusEffectMgrService().Handle_get_grace_state(), [
+  const statusEffectMgr = new StatusEffectMgrService();
+  assert.deepEqual(statusEffectMgr.Handle_get_grace_state(), [
     0.0,
     false,
   ]);
+  const statusEffectConfig = statusEffectMgr.callMethod(
+    "get_effect_config",
+    [],
+    null,
+    { type: "dict", entries: [["effect_key", "heat"]] },
+  );
+  assert.deepEqual(statusEffectConfig, {
+    type: "dict",
+    entries: [
+      ["grace_increment", 0.0],
+      ["grace_decrement", 0.0],
+      ["grace_severity_bonus", 0.0],
+      ["trait_interval_low", 1.0],
+      ["trait_interval_high", 1.0],
+      ["has_medical_traits", false],
+      ["severity_curve", { type: "dict", entries: [] }],
+      ["raiment_type_id", 0],
+      ["raiment_nominal_max_bonus", 0.0],
+    ],
+  });
+  assert.doesNotThrow(() => marshalEncode(statusEffectConfig, {
+    compatibilityProfile: "frontier",
+  }));
 
   const shellManager = new ShellManagerService();
   assert.equal(shellManager.Handle_get_active_shell_db_data(), null);
@@ -602,7 +627,57 @@ test("Frontier startup services return indexable empty/default contracts", () =>
     items: [],
   });
   assert.equal(shellManager.Handle_get_last_crown_created_time(), null);
+  assert.equal(
+    shellManager.callMethod("has_raiment", [], null, null),
+    false,
+  );
+  assert.equal(shellManager.Handle_has_reignment(), false);
   assert.equal(new BerthingSvcService().Handle_get_my_contract(), null);
+});
+
+test("Frontier ship activation evaluates heat state without a missing clock symbol", () => {
+  const service = new ShipService();
+  const activeShip = {
+    itemID: 9988400999999,
+    ownerID: 0,
+    typeID: 670,
+    conditionState: {},
+  };
+  const frontierActivation = service._buildActivationResponse(
+    activeShip,
+    {
+      characterID: 0,
+      compatibilityProfile: "frontier",
+    },
+  );
+
+  // Frontier intentionally sends the first three activation elements, but the
+  // heat element is constructed before profile normalization.  This call is
+  // therefore the regression check for the live Board exception.
+  assert.equal(Array.isArray(frontierActivation), true);
+  assert.equal(frontierActivation.length, 3);
+
+  const legacyActivation = service._buildActivationResponse(
+    activeShip,
+    {
+      characterID: 0,
+      compatibilityProfile: "tranquility",
+    },
+  );
+  assert.equal(legacyActivation.length, 4);
+  const heatState = legacyActivation[3];
+  assert.equal(heatState.type, "dict");
+  assert.deepEqual(
+    heatState.entries.map(([attributeID]) => attributeID),
+    [1176, 1177, 1175],
+  );
+  for (const [, heatTuple] of heatState.entries) {
+    assert.equal(typeof heatTuple[5], "bigint");
+    assert.equal(heatTuple[5] > 116444736000000000n, true);
+  }
+  assert.doesNotThrow(() => marshalEncode(frontierActivation, {
+    compatibilityProfile: "frontier",
+  }));
 });
 
 test("Frontier shell manager provisions one client-visible active shell", () => {

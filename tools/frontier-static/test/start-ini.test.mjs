@@ -19,3 +19,14 @@ test("parseStartIni reads Frontier build metadata", () => {
     "main.version": "20.04",
   });
 });
+
+test("parseStartIni normalizes section and key casing", () => {
+  const values = parseStartIni(`
+[MAIN]
+AppName = FRONTIER
+BUILD = 3474408
+`);
+
+  assert.equal(values["main.appname"], "FRONTIER");
+  assert.equal(values["main.build"], "3474408");
+});

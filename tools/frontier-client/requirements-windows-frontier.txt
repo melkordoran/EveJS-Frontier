@@ -1,0 +1,6 @@
+# Exact Python 3.12 environment proven against Windows Frontier build 3474408.
+# The runtime patch/check code is standard-library-only; these packages support
+# contract export and the recorded PE/disassembly validation workflow.
+capstone==5.0.9
+pefile==2024.8.26
+protobuf==7.36.0

@@ -1,0 +1,117 @@
+{
+  "format": "evejs-frontier-build-comparison-v1",
+  "baselineBuild": 3467658,
+  "candidateBuild": 3474408,
+  "handshake": {
+    "baseline": {
+      "version": "20.04",
+      "codename": "cycle-6",
+      "machoNetVersion": 489,
+      "birthday": 170472,
+      "evidence": [
+        "doc/FRONTIER_MILESTONE_3.md",
+        "doc/FRONTIER_MILESTONE_1.md",
+        "StartFrontierServer.sh"
+      ]
+    },
+    "candidate": {
+      "appName": "FRONTIER",
+      "build": 3474408,
+      "sync": 3474408,
+      "version": "20.04",
+      "branch": "//frontier/cycle-6",
+      "codename": "cycle-6",
+      "region": "ccp",
+      "machoNetVersion": 489,
+      "birthday": 170472,
+      "machoNetModuleSha256": "683d7695e7280ae99f4a108ed41a5c66ab4235d5c7319e1bfea696bf0749e3de",
+      "gpsModuleSha256": "80d2b353b81951e84b022aff1508cec278eea9f7c01d656ab3cf0a36a183d2e8"
+    },
+    "assessment": "Version, cycle, MachoNet version, and birthday are unchanged; only build and sync advanced."
+  },
+  "staticData": {
+    "baseline": {
+      "systems": 24026,
+      "landscapeSites": 113253,
+      "types": 32608,
+      "stargates": 7072,
+      "evidence": "doc/FRONTIER_MILESTONE_3.md"
+    },
+    "candidate": {
+      "systems": 24026,
+      "landscapeSites": 113253,
+      "types": 32623,
+      "stargates": 7072,
+      "snapshotOutputsIdentity": {
+        "algorithm": "sha256(JSON.stringify(sorted output name -> { records, sha256 }))",
+        "sha256": "046bbd404b6cbb963149d9bb8155766cac6447e683d6f15b47d5152ff1a3b9fc"
+      }
+    },
+    "knownCountDelta": {
+      "systems": 0,
+      "landscapeSites": 0,
+      "types": 15,
+      "stargates": 0
+    },
+    "candidateSemanticAuthority": {
+      "rift14001EntryTypeID": 92395,
+      "rift14001TriggerCount": 4,
+      "rift14008EntryTypeID": 92415,
+      "rift14008TriggerCount": 4,
+      "fringeTallyport": {
+        "itemID": 900202923,
+        "solarSystemID": 30010146,
+        "typeID": 92480,
+        "dungeonID": 14026
+      }
+    },
+    "limit": "The build-3467658 JSONL snapshot was not committed and is not available locally, so the identities of the 15 added type rows cannot be established from the available evidence."
+  },
+  "contracts": {
+    "baseline": {
+      "trackedAssessment": "Build 3467658 retained the existing public protobuf contracts and client-module surface.",
+      "evidence": "doc/FRONTIER_MILESTONE_3.md",
+      "descriptorArtifactAvailable": false,
+      "moduleInventoryArtifactAvailable": false
+    },
+    "candidate": {
+      "descriptorFiles": 163,
+      "failedDescriptors": 0,
+      "protoMembers": 163,
+      "clientModules": 239,
+      "descriptorSetSha256": "5485215de6d5cf605e936d8e5c8aa11e0b72b4e89ccef96ff45579cca9fbf381",
+      "descriptorJsonSha256": "fbdf4f10cf9ac3e7724ad960f161e5714501f0c6e5e12d9e14e211148aee197a",
+      "contractIndexSha256": "254dd95b50767d325311a199f534fa5cd54d89977d25dcba34312c3b946b5b61",
+      "clientModuleInventorySha256": "346a3623ca31500b097409839bbdf91e6d5b8f64b04f4c4c8bd98e7c7b3d81b7"
+    },
+    "assessment": "No changed server contract is identified by the available evidence, but byte-for-byte descriptor and module-inventory equivalence to 3467658 cannot be independently established without the missing baseline artifacts. Live smoke acceptance remains required."
+  },
+  "bytecodeProfiles": {
+    "docking": {
+      "module": "menucheckers/celestialCheckers.pyc",
+      "baselineSourceCodeSha256": "feabf46e4729228483a827b1c15ee214418bfa9da6e35164d3c1adf493e5dc58",
+      "candidateSourceCodeSha256": "3696be40c2b62a568d262b82a8a1cbb80234664a426ab2ca4805c3ff8004d9e3",
+      "candidatePatchedCodeSha256": "0160fb89777202192db3da212dfaa72bb6cff741c726b0392af6a438cb901a41",
+      "semanticDelta": "The code fingerprint changed, but the unique top-level DOCKING_DISABLED assignment remains True and the exact patch changes only that assignment to False."
+    },
+    "beta": {
+      "module": "frontier/beta.pyc",
+      "baselineSourceCodeSha256": "407cc5255d786655c80aae942db7e73e29bcf00cce34b601236eb71b652eb89b",
+      "candidateSourceCodeSha256": "5280137bf5d4a200b8da21524069605ae9faf8e6ebbcbd3c0ace46edd8e580ca",
+      "candidatePatchedCodeSha256": "5d53d39d3d1ca156d124540d99c7c771b7ab331a215558bb36f612a48d078495",
+      "semanticDelta": "The fingerprint changed; the same six tested beta guards remain True and the exact patch changes only those six assignments to False."
+    },
+    "shell": {
+      "module": "frontier/shell/common/const.pyc",
+      "baselineSourceCodeSha256": "a340924d86ae5ecc207e823ed1ee7db1cd4f8454c493ffa047b0fe90739cf9ae",
+      "candidateSourceCodeSha256": "e7a195fbc655411a1ee49abc37a44e0a8a30287cf621165d064de28622c6aa61",
+      "candidatePatchedCodeSha256": "d81eed85f3c888fe31025c1420a7f6fbf7bf7d23cee34d409a245a04f2eb0437",
+      "semanticDelta": "HIDE_SHELL_REIGNMENT_SYSTEM was corrected to HIDE_SHELL_RAIMENT_SYSTEM and now ships False. The candidate patch changes only HIDE_SHELL_IMPLANT_SYSTEM from True to False."
+    }
+  },
+  "serverContractAssessment": {
+    "implementationRequiredFromThisComparison": [],
+    "status": "no-change-identified-baseline-artifacts-missing",
+    "acceptanceBoundary": "Do not declare build support until exact staged checks, the full automated suite, and the live rendered-space smoke test pass."
+  }
+}

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import path from "node:path";
 import test from "node:test";
 
 import {
@@ -56,19 +57,21 @@ test("the Frontier snapshot includes modular ship creation authority", () => {
 });
 
 test("parseArgs accepts an explicit Frontier client and build", () => {
+  const clientRoot = path.resolve("tmp", "frontier client");
+  const outDir = path.resolve("tmp", "frontier output");
   const options = parseArgs([
     "--client-root",
-    "/tmp/frontier",
+    clientRoot,
     "--build",
     "3450341",
     "--out",
-    "/tmp/output",
+    outDir,
     "--force",
     "--dry-run",
   ]);
-  assert.equal(options.clientRoot, "/tmp/frontier");
+  assert.equal(options.clientRoot, clientRoot);
   assert.equal(options.build, 3450341);
-  assert.equal(options.outDir, "/tmp/output");
+  assert.equal(options.outDir, outDir);
   assert.equal(options.force, true);
   assert.equal(options.dryRun, true);
 });

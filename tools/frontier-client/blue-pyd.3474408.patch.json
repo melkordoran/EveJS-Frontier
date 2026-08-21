@@ -1,0 +1,64 @@
+{
+  "format": "evejs-frontier-windows-pe-patch-v1",
+  "name": "blue.pyd",
+  "description": "Exact-build manifest-verification patch for the Windows EVE Frontier client. Build 3474408 renamed the native blue module from blue.dll to blue.pyd; manifest.dat names this file and the PE exports PyInit_blue.",
+  "build": 3474408,
+  "platform": "windows",
+  "architecture": {
+    "machine": "AMD64",
+    "machineHex": "0x8664",
+    "peFormat": "PE32+",
+    "imageBaseHex": "0x180000000"
+  },
+  "source": {
+    "size": 6094480,
+    "sha256": "86f543d962e7531d1b47decc10498731927d32d28478fbc325d77807f67fc397",
+    "authenticode": {
+      "state": "valid",
+      "signerThumbprintSha1": "BE688C28E20108AB16E53BA40990765EE8536F2B",
+      "securityDirectoryOffsetHex": "0x005CD600",
+      "securityDirectorySizeHex": "0x00002890",
+      "certificateRevisionHex": "0x0200",
+      "certificateTypeHex": "0x0002",
+      "certificateOverlayEndsAtEof": true
+    }
+  },
+  "target": {
+    "size": 6084096,
+    "sha256": "2dcfd00d4b84534abecf7f4cb3be09209fb2bac85377066cb8e18fe32131de82",
+    "peChecksumHex": "0x005CE796",
+    "authenticode": {
+      "state": "stripped-after-content-mutation",
+      "securityDirectoryOffset": 0,
+      "securityDirectorySize": 0
+    }
+  },
+  "patches": [
+    {
+      "fileOffset": 1665094,
+      "fileOffsetHex": "0x00196846",
+      "rvaHex": "0x00197446",
+      "description": "VerifySignature result normalization: replace setne al with mov al,1 plus nop, leaving the following result-byte store intact.",
+      "beforeHex": "0f95c0",
+      "afterHex": "b00190",
+      "contextBeforeHex": "1f7607ff15397d2600cce833872400904885f67409488bcee86da30e0090eb72",
+      "contextAfterHex": "41880424660f6f05ab523500f30f7f45e8c645d800488d55d8488bcfe88665ee"
+    }
+  ],
+  "verifierEvidence": {
+    "verifySignatureFunctionRva": "0x00197220-0x001974D6",
+    "unpackManifestFunctionRva": "0x0019B4A0-0x0019C0AF",
+    "unpackManifestCallRva": "0x0019BFE9",
+    "invalidSignatureStringRva": "0x004E4A08",
+    "uniquePatchedInstructionSequence": "0f95c041880424",
+    "uniquePatchedInstructionSequenceOccurrences": 1,
+    "semantics": "The verifier call returns 1 for a valid signature, 0 for a mismatch, and a negative value for an error. The preceding jns preserves the error path. setne al normalizes 1/0 to the result byte consumed by UnpackManifest. The patch forces only that normalized result byte to true; negative verifier errors still take the original error path."
+  },
+  "manifestTargets": [
+    "root:\\code.ccp",
+    "root:/bin64/packages/certifi\\cacert.pem",
+    "root:/bin64\\blue.pyd",
+    "root:/bin64\\cacert.pem",
+    "root:/bin64\\exefile.exe"
+  ]
+}

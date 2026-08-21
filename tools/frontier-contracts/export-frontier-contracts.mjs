@@ -2,25 +2,21 @@
 
 import crypto from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 import {
-  compileRunner,
-  discoverBuilds,
+  discoverFrontierClients,
   selectBuild,
-} from "../frontier-static/extract-frontier-static.mjs";
+} from "../frontier-static/lib/frontier-client-discovery.mjs";
+import {
+  buildPythonInvocation,
+  resolveFrontierPython,
+} from "../frontier-static/lib/frontier-python.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPT_DIR, "../..");
-const DEFAULT_CLIENT_ROOT = path.join(
-  os.homedir(),
-  "Library",
-  "Application Support",
-  "EVE Frontier",
-);
 const OUTPUT_FORMAT = "evejs-frontier-contracts-v1";
 
 const CLIENT_MODULE_PREFIXES = Object.freeze([
@@ -42,7 +38,7 @@ function usage() {
     "  node tools/frontier-contracts/export-frontier-contracts.mjs [options]",
     "",
     "Options:",
-    `  --client-root <path>  Frontier data root (default: ${DEFAULT_CLIENT_ROOT})`,
+    "  --client-root <path>  Explicit launcher/cache root or build directory",
     "  --build <number>      Require a specific installed client build",
     "  --out <path>          Output directory (default: _local/frontier-contracts/<build>)",
     "  --force               Replace an exporter-owned snapshot",
@@ -54,7 +50,7 @@ function usage() {
 function parseArgs(argv = process.argv.slice(2)) {
   const options = {
     build: null,
-    clientRoot: DEFAULT_CLIENT_ROOT,
+    clientRoot: null,
     dryRun: false,
     force: false,
     outDir: null,
@@ -174,10 +170,10 @@ function main() {
   }
 
   const selected = selectBuild(
-    discoverBuilds(options.clientRoot),
+    discoverFrontierClients({ clientRoot: options.clientRoot }),
     options.build,
   );
-  const codePath = path.join(selected.buildRoot, "code.ccp");
+  const codePath = selected.files.codeArchive;
   if (!fs.existsSync(codePath) || !fs.statSync(codePath).isFile()) {
     throw new Error(`Frontier code archive not found: ${codePath}`);
   }
@@ -210,7 +206,10 @@ function main() {
     "frontier-tools",
     String(selected.build),
   );
-  const runner = compileRunner(selected.buildRoot, toolsRoot);
+  fs.mkdirSync(toolsRoot, { recursive: true });
+  const runner = resolveFrontierPython(selected.buildRoot, toolsRoot, {
+    requiredImports: ["google.protobuf"],
+  });
   const requestPath = path.join(toolsRoot, "contract-export-request.json");
   fs.writeFileSync(
     requestPath,
@@ -222,24 +221,16 @@ function main() {
     "utf8",
   );
 
-  const pythonPath = [
-    codePath,
-    path.join(selected.buildRoot, "bin64"),
-  ].join(path.delimiter);
-  const result = commandResult(
+  const invocation = buildPythonInvocation(
     runner,
-    [
-      path.join(SCRIPT_DIR, "dump_frontier_contracts.py"),
-      "--request",
-      requestPath,
-      "--out",
-      workDir,
-    ],
+    path.join(SCRIPT_DIR, "dump_frontier_contracts.py"),
+    ["--request", requestPath, "--out", workDir],
+  );
+  const result = commandResult(
+    invocation.command,
+    invocation.args,
     {
-      env: {
-        ...process.env,
-        PYTHONPATH: pythonPath,
-      },
+      env: invocation.env,
     },
   );
   const reportLines = result.stdout.trim().split(/\r?\n/).filter(Boolean);
@@ -253,10 +244,14 @@ function main() {
       branch: selected.startIni["main.branch"],
       build: selected.build,
       channel: selected.channel,
+      codename: selected.metadata.codename,
       codeArchive: {
         bytes: fs.statSync(codePath).size,
         sha256: sha256File(codePath),
       },
+      nativeBlueName: selected.nativeBlueName,
+      region: selected.metadata.region,
+      sync: selected.metadata.sync,
       version: selected.startIni["main.version"],
     },
     summary: report.summary,

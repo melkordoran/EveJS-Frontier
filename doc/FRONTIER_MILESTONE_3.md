@@ -6,10 +6,11 @@ compatibility research: use authority extracted from the installed client,
 implement only observed contracts, and keep the retail client and normal EveJS
 runtime untouched.
 
-## Current Baseline
+## Baselines
 
 - Client version: `20.04`, cycle 6, MachoNet `489`
-- Current development build: `3467658`
+- Last live-accepted macOS build: `3467658`
+- Windows candidate with exact profiles: `3474408`
 - Game endpoint: `127.0.0.1:26000`
 - Secure local public gateway: `127.0.0.1:26103`
 - XMPP endpoint: `127.0.0.1:5222`
@@ -47,7 +48,7 @@ The current profile includes:
 - client-authored landscapes, dungeon geometry, Rift scenes, and deterministic
   site commands without inventing missing server-side spawn tables.
 
-## Client Staging
+## macOS Client Staging
 
 `StageFrontierClient.sh` copies the installed app into:
 
@@ -72,6 +73,47 @@ The patcher refuses unknown builds, unexpected bytes, partial patches,
 unrecognized bytecode, or mismatched manifest state. It never modifies the
 retail app.
 
+## Windows Client Staging Candidate
+
+Build `3474408` adds a separate native Windows workflow. It does not reuse the
+conventional EVE Online build-`3396210` wizard and does not alter the macOS
+scripts above. The Windows client renamed its native module to
+`bin64\blue.pyd`; both `manifest.dat` and the exported Python symbol confirm
+that this is the build's native blue module rather than a missing `blue.dll`.
+
+`StageFrontierClient.ps1` copies the build into:
+
+```text
+%LOCALAPPDATA%\EveJS-Frontier\windows\staged-client\<build>
+```
+
+Its marker-owned workflow hashes the official client before and after staging,
+copies every non-resource build file, writes Placebo configuration, and either
+creates a documented junction to the official shared `ResFiles` cache or makes
+a complete resource copy. The transaction creates a timestamped in-stage
+backup before changing `blue.pyd`, `code.ccp`, both CA bundles,
+`manifest.dat`, or marker state.
+
+The `blue-pyd.3474408.patch.json` profile proves an AMD64 PE32+ verifier path
+and one exact normalization change at file offset `0x00196846`. The full signed
+source hash is
+`86f543d962e7531d1b47decc10498731927d32d28478fbc325d77807f67fc397`;
+the deterministic target hash after exact certificate-overlay removal and PE
+checksum recalculation is
+`2dcfd00d4b84534abecf7f4cb3be09209fb2bac85377066cb8e18fe32131de82`.
+Partial and unknown states fail.
+
+The exact docking, beta, and shell bytecode fingerprints also changed from
+`3467658` and were re-derived rather than allowlisted. The new shell constant
+is spelled `HIDE_SHELL_RAIMENT_SYSTEM` and already ships `False`; the candidate
+profile changes only the implant guard there, plus the same six tested beta
+guards and the docking assignment. No blanket beta-disable behavior was added.
+
+The PowerShell `-Check` path independently validates the stage, backups,
+official hashes, manifest digests/trailer, certificates, `ResFiles`, Placebo
+configuration, exact code states, exact `blue.pyd` target, and the untouched
+signed `exefile.exe`.
+
 ## Reproduction
 
 The complete extraction, server, staging, and launch sequence is documented in
@@ -87,6 +129,19 @@ git diff --check
 Automated tests are a compatibility gate, not proof of client-visible success.
 Each supported build still requires a live login, rendered-space, flight, warp,
 map, fitting, storage, docking, and gate-travel smoke test.
+
+The Windows candidate uses PowerShell 7 commands documented in
+[Frontier Windows setup](FRONTIER_WINDOWS_SETUP.md). Its automated gate also
+includes:
+
+```powershell
+npm run test:frontier-windows
+npm run test:frontier-static
+npm run test:frontier-server -- --build 3474408
+```
+
+PowerShell parser checks, Python compilation/tests, Node syntax checks, listener
+inspection, and `git diff --check` remain part of the final acceptance run.
 
 ## Build 3465410 Validation
 
@@ -133,6 +188,73 @@ macOS update completed the following checks:
 One extracted localization row currently resolves dungeon `12535` to the raw
 message identifier `20002278` rather than `Accelerator Facility`. This is a
 client-data quality difference, not a protocol or startup blocker.
+
+## Build 3474408 Windows Candidate Evidence
+
+Build `3474408` retains Frontier `20.04`, cycle 6, MachoNet `489`, and birthday
+`170472`. The evidence derived from the untouched installed Windows client and
+current build-numbered outputs is:
+
+- `start.ini` reports build/sync `3474408`, branch `//frontier/cycle-6`, region
+  `ccp`, and app name `FRONTIER`;
+- MachoNet and GPS bytecode independently retain MachoNet `489` and birthday
+  `170472`;
+- external CPython 3.12 successfully imported the client types loader and
+  protobuf modules with client-rooted Python and DLL paths, so MSVC was not
+  required for this machine's extraction;
+- the static snapshot validated with 24,026 systems, 113,253 landscape sites,
+  32,623 types, and 7,072 stargates—15 more types than the `3467658` recorded
+  count and no change to the other three counts;
+- contract export produced 163 descriptor files with no failures and 239
+  client modules;
+- exact source and patched hashes were derived for `blue.pyd`, station docking,
+  the six selected beta guards, and the one implant shell guard;
+- the official `exefile.exe` and `blue.pyd` initially had valid Authenticode,
+  and the PE certificate table was proven to be a single overlay ending at
+  EOF;
+- the strict manifest parser identified the actual five digest targets,
+  including `root:/bin64\blue.pyd`, while retaining the version-4 trailer;
+- the official `blue.pyd` and `code.ccp` hashes were rechecked after analysis
+  on temporary copies without a detected source change.
+
+The build-`3467658` descriptor set, client-module inventory, and JSONL snapshot
+are not present in this checkout. Therefore byte-for-byte contract equivalence
+and the identities of the 15 new type rows remain unproven from the available
+baseline. Static comparison alone did not identify a changed server contract.
+The subsequent live run did expose the corrected `shellManager.has_raiment`
+spelling, the `statusEffectMgr.get_effect_config` mapping surface, and a latent
+ship-activation clock reference. Their accepted shapes and neutral fallbacks
+were derived from the exact installed bytecode, implemented without claiming
+to reproduce an unknown CCP production payload, and covered by focused tests.
+
+The completed Windows evidence now also includes:
+
+- a build-numbered stage at
+  `%LOCALAPPDATA%\EveJS-Frontier\windows\staged-client\3474408`, with a verified
+  junction to the discovered official `ResFiles` cache;
+- a green independent staged `-Check`, including exact patched `blue.pyd` and
+  `code.ccp`, both one-copy CA bundles and certificate chains, the five actual
+  manifest targets and unchanged trailer, the complete backup, Placebo boot,
+  signed untouched `exefile.exe`, and official-source preservation;
+- a retained transaction backup at
+  `<stage>\.evejs-backups\frontier-client-20260821-135648`;
+- complete validation suites: PowerShell parser 16/16, Python compilation
+  12/12 and units 15/15, Node syntax 1,028/1,028, static 28/28, build-specific
+  server 216/216, Windows Node 14/14 plus Python 15/15, runners 6/6,
+  isolated-helper 2/2, and `git diff --check`;
+- all six live listeners bound only to `127.0.0.1`;
+- a LogLite-assisted session-free client handshake with build `3474408`,
+  birthday `170472`, MachoNet `489`, version `20.04`, and project
+  `cycle-6@ccp`, followed by login, character creation/selection, rendered
+  station and space, undock, station docking, XMPP, and TLS/H2 public-gateway
+  streams; and
+- a post-run official-client re-hash matching every recorded pre-stage value.
+
+The live session did not complete movement/warp, Creation fitting and
+reload/unload, Smart Storage, Heavy Gate traversal, or the full HUD/map call
+surface. The service fixes discovered during that run also require a client
+recheck. Build `3474408` therefore remains a Windows candidate rather than a
+claim of complete live gameplay support.
 
 ## Known Limits
 

@@ -12,6 +12,14 @@ import {
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPT_DIR, "../..");
+const RIFT_AUTHORITY_BUILDS = new Set([
+  3450341,
+  3455996,
+  3463382,
+  3465410,
+  3467658,
+  3474408,
+]);
 
 function usage() {
   return [
@@ -187,7 +195,7 @@ function validateDatabase(dataDir, snapshotManifest, databaseManifest) {
   }
 
   const clientBuild = Number(snapshotManifest.source.client.build);
-  if (new Set([3450341, 3455996, 3463382, 3465410, 3467658]).has(clientBuild)) {
+  if (RIFT_AUTHORITY_BUILDS.has(clientBuild)) {
     const riftF935 = frontierDungeonTemplates.find(
       (dungeon) => Number(dungeon.dungeonID) === 14001,
     );
@@ -310,5 +318,6 @@ if (process.argv[1] &&
 
 export {
   parseArgs,
+  RIFT_AUTHORITY_BUILDS,
   validateDatabase,
 };

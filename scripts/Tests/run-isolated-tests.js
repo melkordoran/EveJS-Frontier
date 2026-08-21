@@ -36,39 +36,57 @@ if (testFiles.length === 0) {
   process.exit(2);
 }
 
-const store = createIsolatedGameStore();
-console.log(
-  `[isolated-tests] store=${store.storeRoot} baseline=${store.baselineRoot}`,
-);
-
-let exitCode = 1;
-try {
-  const result = spawnSync(
-    process.execPath,
-    [
-      "--test",
-      "--require",
-      HELPER_PATH,
-      ...passthroughFlags,
-      ...testFiles.map((file) => path.resolve(REPO_ROOT, file)),
-    ],
-    {
-      cwd: REPO_ROOT,
-      stdio: "inherit",
-      env: {
-        ...process.env,
-        ...store.env,
-      },
-    },
+async function main() {
+  const store = await createIsolatedGameStore({
+    seedFrontierFixtures:
+      process.env.EVEJS_TEST_FRONTIER_FIXTURES === "1",
+  });
+  console.log(
+    `[isolated-tests] store=${store.storeRoot} baseline=${store.baselineRoot}`,
   );
-  exitCode = result.status === null ? 1 : result.status;
-} finally {
+
+  let exitCode = 1;
   try {
-    store.cleanup();
-  } catch (error) {
-    console.warn(
-      `[isolated-tests] failed to remove ${store.storeRoot}: ${error.message}`,
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--test",
+        "--require",
+        HELPER_PATH,
+        ...passthroughFlags,
+        ...testFiles.map((file) => path.resolve(REPO_ROOT, file)),
+      ],
+      {
+        cwd: REPO_ROOT,
+        stdio: "inherit",
+        env: {
+          ...process.env,
+          ...store.env,
+        },
+      },
     );
+    if (result.error) {
+      throw result.error;
+    }
+    exitCode = result.status === null ? 1 : result.status;
+  } finally {
+    try {
+      store.cleanup();
+    } catch (error) {
+      console.warn(
+        `[isolated-tests] failed to remove ${store.storeRoot}: ${error.message}`,
+      );
+    }
   }
+  return exitCode;
 }
-process.exit(exitCode);
+
+main().then(
+  (exitCode) => {
+    process.exitCode = exitCode;
+  },
+  (error) => {
+    console.error(`[isolated-tests] ${error.stack || error.message}`);
+    process.exitCode = 1;
+  },
+);
