@@ -52,6 +52,7 @@ const TYPE_LAUNCH_BAY = 95811;
 const TYPE_FIELD_CAIRN = 93141;
 const TYPE_WRONG_GROUP_CHARGE = 82126;
 const TYPE_REFUGE_CREATION = 95735;
+const TYPE_REIVER = 87848;
 const CREATION_MODULE_CHARGE_FLAG_ID = 184;
 // A real signature-bearing type from spaceComponentsByType (baseSignature 2.0).
 const TYPE_SIGNATURE_TARGET = 23;
@@ -125,6 +126,42 @@ test("no ability is advertised without a registered handler", () => {
       );
     }
   }
+});
+
+test("non-Creation ships return the exact client-handled UnknownCreation exception", () => {
+  const shipGrant = itemStore.grantItemToCharacterLocation(
+    OWNER_ID,
+    SOLAR_SYSTEM_ID,
+    0,
+    TYPE_REIVER,
+    1,
+    { individualItems: true, singleton: 1 },
+  );
+  assert.equal(shipGrant.success, true, shipGrant.errorMsg);
+  const ship = shipGrant.data.items[0];
+  assert.throws(
+    () => new CreationService().Handle_get_creation(
+      [ship.itemID],
+      { characterID: OWNER_ID, shipID: ship.itemID },
+    ),
+    (error) => {
+      const response = error && error.machoErrorResponse;
+      const header = response && response.payload && response.payload.header;
+      assert.equal(
+        header && header[0] && header[0].value,
+        "frontier.creation.common.errors.CreationError",
+      );
+      assert.deepEqual(header[1], ["CreationError_UnknownCreation"]);
+      assert.deepEqual(
+        header[2],
+        {
+          type: "dict",
+          entries: [["msg", "CreationError_UnknownCreation"]],
+        },
+      );
+      return true;
+    },
+  );
 });
 
 function buildDispatchContext(moduleTypeID, moduleItemID = 500001) {

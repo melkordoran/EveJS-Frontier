@@ -16,7 +16,7 @@ import zipfile
 
 
 MODULE_NAME = "menucheckers/celestialCheckers.pyc"
-DEFAULT_CLIENT_BUILD = 3467658
+DEFAULT_CLIENT_BUILD = 3474408
 BUILD_PROFILES = {
     3450341: {
         "source_member_sha256": "cbdd5ede870cc365456144fe1ddade1994f4c01ece2f6e10db40dadd0854e6e2",
@@ -42,6 +42,12 @@ BUILD_PROFILES = {
         "source_member_sha256": "f28d919481f422077f24515ea52acd61995ab1439c3d1946ad919bf8520223d2",
         "source_code_sha256": "feabf46e4729228483a827b1c15ee214418bfa9da6e35164d3c1adf493e5dc58",
         "patched_code_sha256": "79f76d82ddcb51865494a026f814f204493bc1cebb0d872111f1cfe5fe1909bc",
+    },
+    3474408: {
+        "source_member_sha256": "a5e7c719d817d590904706685ceb09b71852f0adb08c9b1c277f339b8a4b9577",
+        "source_code_sha256": "3696be40c2b62a568d262b82a8a1cbb80234664a426ab2ca4805c3ff8004d9e3",
+        "patched_member_sha256": "b003c61fd16a3cfebd115c03b8987249e7252321f756036e620a507d94a0e1e3",
+        "patched_code_sha256": "0160fb89777202192db3da212dfaa72bb6cff741c726b0392af6a438cb901a41",
     },
 }
 
@@ -168,7 +174,16 @@ def inspect_state(member, code, profile):
         and code_digest == profile["source_code_sha256"]
     ):
         return "source"
-    if instruction.argval is False and code_digest == profile["patched_code_sha256"]:
+    expected_patched_member = profile.get("patched_member_sha256")
+    patched_member_matches = (
+        expected_patched_member is None
+        or member_digest == expected_patched_member
+    )
+    if (
+        instruction.argval is False
+        and patched_member_matches
+        and code_digest == profile["patched_code_sha256"]
+    ):
         return "patched"
     raise DockingPatchError(
         "celestialCheckers.pyc is not the supported source or patched build "
@@ -191,6 +206,12 @@ def build_patched_member(member, code, profile):
     patched_member = member[:16] + marshal.dumps(patched_code)
     if code_sha256(patched_code) != profile["patched_code_sha256"]:
         raise DockingPatchError("Patched celestialCheckers.pyc code did not match.")
+    expected_member_digest = profile.get("patched_member_sha256")
+    if (
+        expected_member_digest is not None
+        and sha256_bytes(patched_member) != expected_member_digest
+    ):
+        raise DockingPatchError("Patched celestialCheckers.pyc member did not match.")
     return patched_member
 
 
@@ -216,7 +237,7 @@ def rewrite_archive(archive_path, patched_member):
                 f"Expected one {MODULE_NAME} entry while rebuilding code.ccp."
             )
         shutil.copystat(archive_path, temporary_path)
-        with temporary_path.open("rb") as handle:
+        with temporary_path.open("r+b") as handle:
             os.fsync(handle.fileno())
         os.replace(temporary_path, archive_path)
     finally:

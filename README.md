@@ -6,20 +6,130 @@ Join the project Discord: [https://discord.gg/KMuJrMDEBa](https://discord.gg/KMu
 
 ## EVE Frontier compatibility fork
 
-This checkout contains an experimental, isolated compatibility profile for EVE
-Frontier build `3467658`. It extracts static data only from the locally
-installed client, stages a separate client copy, and leaves the retail client
-and normal EveJS installation untouched.
+This checkout contains an experimental, isolated EVE Frontier compatibility
+profile. The last live-accepted macOS target is build `3467658`; Windows build
+`3474408` now has exact extraction, bytecode, and `blue.pyd` profiles. A
+LogLite-assisted session-free smoke run completed the exact handshake, login,
+character creation/selection, rendered station and space, station docking,
+XMPP, and the secure public gateway. The remaining flight/warp, Creation
+reload/unload, Smart Storage, Heavy Gate, and HUD/map interactions still need a
+complete live pass, so the Windows profile remains a candidate. Each workflow
+extracts static data from the locally installed client, stages a separate
+client copy, and leaves the retail client and normal EveJS installation
+untouched.
 
-The current profile reaches character creation and selection, rendered space,
-native flight and warp, modular Creation fitting, local XMPP, deployables,
+The live-accepted macOS profile reaches character creation and selection,
+rendered space, native flight and warp, modular Creation fitting, local XMPP, deployables,
 Refuge berthing, Heavy Gate travel, and Smart Storage. See
 [milestone three](doc/FRONTIER_MILESTONE_3.md) for the implemented surface and
 known limits. [Milestone one](doc/FRONTIER_MILESTONE_1.md) and
 [milestone two](doc/FRONTIER_MILESTONE_2.md) preserve the original handshake
 and character-selection history.
 
-### Frontier macOS quickstart
+> The Frontier Windows scripts are not the conventional EVE Online Windows
+> wizard. `SetupEveJS.bat`, `tools\ClientSETUP\ClientSetup.ps1`, `Play.bat`,
+> and `StartServer.bat` target EVE Online build `3396210` and its `tq` layout.
+> Never use their `blue.dll` recipe against a Frontier installation.
+
+### Frontier Windows quickstart (build 3474408 candidate)
+
+The Windows workflow is native: the server and staged client run on the same
+Windows machine. The exact build `3474408` profile uses `bin64\blue.pyd`, not
+`blue.dll`. Unknown hashes, partial patches, another build, or a manifest with
+unexpected entries fail closed.
+
+Requirements:
+
+- Git for Windows and PowerShell 7;
+- Node.js 24 LTS x64 with npm;
+- CPython 3.12 x64 exactly (not Python 3.13 or newer);
+- an installed Frontier build with `appname=FRONTIER` and a resolvable shared
+  `ResFiles` tree.
+
+Visual Studio 2022 C++ Build Tools and the Windows SDK are only needed if the
+external Python 3.12 probe cannot use the client loaders and the minimal
+embedded-Python runner must be compiled. Rust, Docker, OpenSSL, the SQLite CLI,
+and the market daemon are not part of the default Frontier Windows path.
+
+Open PowerShell 7 in the repository root. Discovery is automatic, or pass the
+actual build directory explicitly with `-SourceRoot`:
+
+```powershell
+.\SetupFrontierWindows.ps1 -Status
+.\SetupFrontierWindows.ps1 -DryRun -SourceRoot 'C:\CCP\EVE Frontier\stillness'
+.\SetupFrontierWindows.ps1 -NonInteractive -SourceRoot 'C:\CCP\EVE Frontier\stillness'
+```
+
+The setup installs only missing prerequisites, runs the locked npm installs,
+proves `better-sqlite3` under the active Node ABI, creates the ignored
+`_local\frontier-python312` environment, extracts and validates build-numbered
+data and contracts, generates the database, creates/reuses local certificates,
+and builds the isolated client stage. `SetupFrontierWindows.bat` is a thin
+wrapper that can install PowerShell 7 and invoke the same script.
+
+The default stage is:
+
+```text
+%LOCALAPPDATA%\EveJS-Frontier\windows\staged-client\3474408
+```
+
+By default its `ResFiles` entry is a junction to the official shared cache.
+That saves roughly the size of a second resource cache, but it is shared and
+not OS-enforced read-only. Add `-CopyResFiles` for a complete copy. Every other
+client file is copied before mutation, and the stage marker records the
+official hashes. Cleanup accepts only a marker-owned, build-numbered path under
+the staging base.
+
+Verify an existing stage independently before starting the client:
+
+```powershell
+$stage = "$env:LOCALAPPDATA\EveJS-Frontier\windows\staged-client\3474408"
+.\PatchFrontierClientTrust.ps1 -StagedRoot $stage -Check
+```
+
+The check requires the exact patched `blue.pyd`, exact docking and selected
+feature bytecode, Placebo boot configuration, both CA bundles, certificate
+chains, manifest target digests and untouched trailer, a complete transaction
+backup, valid `exefile.exe` Authenticode, the correct `ResFiles` target, and
+unchanged official-client hashes. The patched `blue.pyd` intentionally no
+longer has its original Authenticode overlay; `exefile.exe` remains unmodified
+and signed.
+
+For daily use, start the explicit build server in one PowerShell and keep it in
+the foreground:
+
+```powershell
+.\StartFrontierServer.ps1 -Build 3474408
+```
+
+In another PowerShell, launch only through the checked stage:
+
+```powershell
+.\PlayFrontier.ps1 -Build 3474408
+```
+
+Session-free launch is the default. If it proves insufficient, start the
+official client from the EVE Launcher, capture only that process's arguments,
+then replay the current-user-only file without printing credentials:
+
+```powershell
+.\CaptureFrontierSession.ps1 -SourceRoot 'C:\CCP\EVE Frontier\stillness'
+.\PlayFrontier.ps1 -Build 3474408 -UseCapturedSession
+```
+
+Use `Ctrl+C` to stop a foreground server and close a foreground client
+normally. For a server started with `-Background`, stop only its recorded PID:
+
+```powershell
+.\StopFrontier.ps1 -Build 3474408
+```
+
+The server does not run or require the market daemon and binds the game, image,
+HTTP/bridge, secure gateway, XMPP, and monitor listeners to `127.0.0.1` only.
+See [Frontier Windows setup](doc/FRONTIER_WINDOWS_SETUP.md) for exact hashes,
+paths, upgrades, backup policy, port checks, and current validation status.
+
+### Frontier macOS quickstart (build 3467658)
 
 The Frontier profile is a native macOS development workflow. Run the server
 and client on the same Mac and keep every listener on `127.0.0.1`.
@@ -375,9 +485,11 @@ Docker data is separate from the native `_local\gameStore` and `externalservices
 
 The Rust RPC port `40111` stays private inside the Docker network.
 
-## Native Windows setup
+## Native Windows setup (EVE Online build 3396210)
 
-Use this path only if you do not want Docker. It requires more host tooling and more separate steps.
+This section is for conventional EVE Online build `3396210`, not EVE Frontier.
+Use this path only if you do not want Docker. It requires more host tooling and
+more separate steps.
 
 ### Requirements
 
@@ -534,6 +646,7 @@ The same two commands make a complete backup and restore on one PC.
 ## More documentation
 
 - [Detailed native setup](doc/SETUP.md)
+- [Frontier Windows setup](doc/FRONTIER_WINDOWS_SETUP.md)
 - [Launcher guide](doc/LAUNCHERS.md)
 - [Market setup](doc/MARKET_SETUP.md)
 - [Market seeder guide](doc/MARKET_SEEDER.md)

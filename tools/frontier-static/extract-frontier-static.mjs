@@ -2,7 +2,6 @@
 
 import crypto from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -11,16 +10,17 @@ import {
   readResourceIndex,
   resolveIndexedResource,
 } from "./lib/resource-index.mjs";
-import { readStartIni } from "./lib/start-ini.mjs";
+import {
+  discoverFrontierClients,
+  selectBuild,
+} from "./lib/frontier-client-discovery.mjs";
+import {
+  buildPythonInvocation,
+  resolveFrontierPython,
+} from "./lib/frontier-python.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPT_DIR, "../..");
-const DEFAULT_CLIENT_ROOT = path.join(
-  os.homedir(),
-  "Library",
-  "Application Support",
-  "EVE Frontier",
-);
 
 const REQUIRED_RESOURCES = {
   agentTypes: "res:/staticdata/agenttypes.fsdbinary",
@@ -64,7 +64,7 @@ function usage() {
     "  node tools/frontier-static/extract-frontier-static.mjs [options]",
     "",
     "Options:",
-    `  --client-root <path>  Frontier data root (default: ${DEFAULT_CLIENT_ROOT})`,
+    "  --client-root <path>  Explicit launcher/cache root or build directory",
     "  --build <number>      Require a specific installed client build",
     "  --out <path>          Output directory (default: _local/frontier-sde/<build>)",
     "  --force               Replace a previous extractor-owned snapshot",
@@ -76,7 +76,7 @@ function usage() {
 function parseArgs(argv = process.argv.slice(2)) {
   const options = {
     build: null,
-    clientRoot: DEFAULT_CLIENT_ROOT,
+    clientRoot: null,
     dryRun: false,
     force: false,
     outDir: null,
@@ -108,64 +108,6 @@ function parseArgs(argv = process.argv.slice(2)) {
   return options;
 }
 
-function discoverBuilds(clientRoot) {
-  const sharedCacheRoot = path.join(clientRoot, "SharedCache");
-  if (!fs.existsSync(sharedCacheRoot) || !fs.statSync(sharedCacheRoot).isDirectory()) {
-    throw new Error(`Frontier SharedCache not found: ${sharedCacheRoot}`);
-  }
-
-  const candidates = [];
-  for (const entry of fs.readdirSync(sharedCacheRoot, { withFileTypes: true })) {
-    if (!entry.isDirectory() && !entry.isSymbolicLink()) {
-      continue;
-    }
-    const buildRoot = path.join(
-      sharedCacheRoot,
-      entry.name,
-      "EVE.app",
-      "Contents",
-      "Resources",
-      "build",
-    );
-    const startIniPath = path.join(buildRoot, "start.ini");
-    if (!fs.existsSync(startIniPath)) {
-      continue;
-    }
-    const startIni = readStartIni(startIniPath);
-    const build = Number(startIni["main.build"]);
-    if (!Number.isSafeInteger(build) || build <= 0) {
-      continue;
-    }
-    candidates.push({
-      build,
-      buildRoot,
-      channel: entry.name,
-      sharedCacheRoot,
-      startIni,
-      startIniPath,
-    });
-  }
-
-  if (candidates.length === 0) {
-    throw new Error(`No installed Frontier client builds found under ${sharedCacheRoot}`);
-  }
-  return candidates.sort((left, right) => right.build - left.build);
-}
-
-function selectBuild(candidates, requestedBuild) {
-  if (requestedBuild == null) {
-    return candidates[0];
-  }
-  const selected = candidates.find((candidate) => candidate.build === requestedBuild);
-  if (!selected) {
-    const available = candidates.map((candidate) => candidate.build).join(", ");
-    throw new Error(
-      `Frontier build ${requestedBuild} is not installed. Available builds: ${available}`,
-    );
-  }
-  return selected;
-}
-
 function commandResult(command, args, options = {}) {
   const result = spawnSync(command, args, {
     encoding: "utf8",
@@ -182,58 +124,9 @@ function commandResult(command, args, options = {}) {
   return result;
 }
 
-function locateClang() {
-  const result = spawnSync("xcrun", ["--find", "clang"], { encoding: "utf8" });
-  if (!result.error && result.status === 0 && result.stdout.trim()) {
-    return result.stdout.trim();
-  }
-  return "clang";
-}
-
-function locateMacOsSdk() {
-  const result = commandResult("xcrun", ["--sdk", "macosx", "--show-sdk-path"]);
-  const sdkPath = result.stdout.trim();
-  if (!sdkPath) {
-    throw new Error("xcrun did not return a macOS SDK path");
-  }
-  return sdkPath;
-}
-
-function compileRunner(buildRoot, toolsRoot) {
-  const libDir = path.join(buildRoot, "bin64");
-  const libPython = path.join(libDir, "libpython3.12.dylib");
-  if (!fs.existsSync(libPython)) {
-    throw new Error(`Frontier embedded Python library not found: ${libPython}`);
-  }
-
-  fs.mkdirSync(toolsRoot, { recursive: true });
-  const sourcePath = path.join(SCRIPT_DIR, "frontier-python-runner.c");
-  const runnerPath = path.join(toolsRoot, "frontier-python312-runner");
-  const needsBuild = !fs.existsSync(runnerPath) ||
-    fs.statSync(runnerPath).mtimeMs < fs.statSync(sourcePath).mtimeMs ||
-    fs.statSync(runnerPath).mtimeMs < fs.statSync(libPython).mtimeMs;
-  if (!needsBuild) {
-    return runnerPath;
-  }
-
-  const clang = locateClang();
-  const sdkPath = locateMacOsSdk();
-  commandResult(clang, [
-    "-std=c11",
-    "-Wall",
-    "-Wextra",
-    "-isysroot",
-    sdkPath,
-    sourcePath,
-    "-L",
-    libDir,
-    "-lpython3.12",
-    `-Wl,-rpath,${libDir}`,
-    "-o",
-    runnerPath,
-  ]);
-  fs.chmodSync(runnerPath, 0o755);
-  return runnerPath;
+// Preserve the extractor's existing public helper signature for downstream tools.
+function discoverBuilds(clientRoot) {
+  return discoverFrontierClients({ clientRoot });
 }
 
 function sha256File(filePath) {
@@ -269,21 +162,16 @@ function prepareDestination(outDir, force) {
 }
 
 function buildRequest(selected, clientRoot) {
-  const indexPath = path.join(selected.buildRoot, "resfileindex.txt");
+  const indexPath = selected.files.resourceIndex;
   const entries = readResourceIndex(indexPath);
-  const resFilesRoot = path.join(selected.sharedCacheRoot, "ResFiles");
+  const resFilesRoot = selected.resFilesRoot;
   const resources = {};
 
   for (const [key, logicalPath] of Object.entries(REQUIRED_RESOURCES)) {
     resources[key] = resolveIndexedResource(entries, logicalPath, resFilesRoot);
   }
 
-  const mapObjectsPath = path.join(
-    selected.buildRoot,
-    "bin64",
-    "staticdata",
-    "mapObjects.db",
-  );
+  const mapObjectsPath = selected.files.mapObjects;
   if (!fs.existsSync(mapObjectsPath) || !fs.statSync(mapObjectsPath).isFile()) {
     throw new Error(`Frontier mapObjects database not found: ${mapObjectsPath}`);
   }
@@ -299,9 +187,12 @@ function buildRequest(selected, clientRoot) {
       branch: main["main.branch"],
       build: selected.build,
       channel: selected.channel,
-      clientRoot,
+      clientRoot: clientRoot || selected.clientRoot,
       codename: main["main.codename"],
       machoVersion: null,
+      nativeBlueName: selected.nativeBlueName,
+      region: main["main.region"],
+      sync: selected.metadata.sync,
       version: main["main.version"],
     },
     index: {
@@ -326,6 +217,9 @@ function publicSourceRequest(request) {
       build: request.client.build,
       channel: request.client.channel,
       codename: request.client.codename,
+      nativeBlueName: request.client.nativeBlueName,
+      region: request.client.region,
+      sync: request.client.sync,
       version: request.client.version,
     },
     index: {
@@ -374,7 +268,7 @@ function main() {
     return;
   }
 
-  const candidates = discoverBuilds(options.clientRoot);
+  const candidates = discoverFrontierClients({ clientRoot: options.clientRoot });
   const selected = selectBuild(candidates, options.build);
   const request = buildRequest(selected, options.clientRoot);
   const outDir = options.outDir ||
@@ -402,28 +296,23 @@ function main() {
     "frontier-tools",
     String(selected.build),
   );
-  const runner = compileRunner(selected.buildRoot, toolsRoot);
+  fs.mkdirSync(toolsRoot, { recursive: true });
+  const runner = resolveFrontierPython(selected.buildRoot, toolsRoot, {
+    requiredImports: ["typesLoader"],
+  });
   const requestPath = path.join(toolsRoot, "extraction-request.json");
   fs.writeFileSync(requestPath, `${JSON.stringify(request, null, 2)}\n`, "utf8");
 
-  const pythonPath = [
-    path.join(selected.buildRoot, "code.ccp"),
-    path.join(selected.buildRoot, "bin64"),
-  ].join(path.delimiter);
-  const result = commandResult(
+  const invocation = buildPythonInvocation(
     runner,
-    [
-      path.join(SCRIPT_DIR, "dump_frontier_static.py"),
-      "--request",
-      requestPath,
-      "--out",
-      workDir,
-    ],
+    path.join(SCRIPT_DIR, "dump_frontier_static.py"),
+    ["--request", requestPath, "--out", workDir],
+  );
+  const result = commandResult(
+    invocation.command,
+    invocation.args,
     {
-      env: {
-        ...process.env,
-        PYTHONPATH: pythonPath,
-      },
+      env: invocation.env,
     },
   );
   const lines = result.stdout.trim().split(/\r?\n/).filter(Boolean);
@@ -470,7 +359,6 @@ if (process.argv[1] &&
 
 export {
   REQUIRED_RESOURCES,
-  compileRunner,
   discoverBuilds,
   parseArgs,
   selectBuild,

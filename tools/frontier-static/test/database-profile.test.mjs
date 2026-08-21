@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import test from "node:test";
 
+import {
+  RIFT_AUTHORITY_BUILDS,
+} from "../build-frontier-database.mjs";
+
 const require = createRequire(import.meta.url);
 const {
   DEFAULT_PROFILE,
@@ -43,4 +47,10 @@ test("DatabaseCreator accepts only the explicit Frontier profile", () => {
     () => parseArgs(["--profile", "unknown"]),
     /Invalid database profile/,
   );
+});
+
+test("build 3474408 is gated by the proven Frontier Rift authority profile", () => {
+  assert.equal(RIFT_AUTHORITY_BUILDS.has(3467658), true);
+  assert.equal(RIFT_AUTHORITY_BUILDS.has(3474408), true);
+  assert.equal(RIFT_AUTHORITY_BUILDS.has(3474409), false);
 });

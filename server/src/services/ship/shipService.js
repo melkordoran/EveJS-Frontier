@@ -581,7 +581,11 @@ class ShipService extends BaseService {
         },
         this._buildChargeStateDict(charID, shipID),
         buildWeaponBankStateDict(shipID, { characterID: charID }),
-        buildActivationHeatStateDict(buildCurrentFileTime()),
+        // activationHeatState owns the Windows FILETIME conversion and uses a
+        // current timestamp when none is supplied.  Keeping that clock in one
+        // place also avoids referring to a ship-service symbol that does not
+        // exist (the live Board path previously threw here).
+        buildActivationHeatStateDict(),
       ],
       session && session.compatibilityProfile,
     );

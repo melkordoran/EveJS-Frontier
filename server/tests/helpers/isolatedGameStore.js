@@ -57,27 +57,89 @@ function cloneTree(sourcePath, destinationPath) {
 
 /**
  * Copy a SQLite database that may be open in WAL mode by a live server. The
- * sqlite3 online-backup API produces a consistent snapshot including
- * un-checkpointed WAL frames; a raw file clone would silently drop them.
+ * better-sqlite3's online-backup API produces a consistent snapshot including
+ * un-checkpointed WAL frames. There is deliberately no raw-copy fallback:
+ * copying only the main file of a live WAL database can silently lose data.
  */
-function cloneSqliteDatabase(sourcePath, destinationPath) {
-  const backup = spawnSync(
-    "sqlite3",
-    [sourcePath, `.backup '${destinationPath.replace(/'/g, "''")}'`],
-    { stdio: "ignore" },
-  );
-  if (backup.status === 0 && fs.existsSync(destinationPath)) {
-    return true;
+async function cloneSqliteDatabase(sourcePath, destinationPath) {
+  if (fs.existsSync(destinationPath)) {
+    throw new Error(
+      `Refusing to replace an existing SQLite backup: ${destinationPath}`,
+    );
   }
-  return cloneTree(sourcePath, destinationPath);
+
+  let Database;
+  try {
+    Database = require("better-sqlite3");
+  } catch (error) {
+    throw new Error(
+      "Cannot create a consistent SQLite test snapshot because " +
+        "server/node_modules/better-sqlite3 is unavailable. Run " +
+        "`npm --prefix server ci` under the active Node version.",
+      { cause: error },
+    );
+  }
+
+  let sourceDatabase;
+  try {
+    sourceDatabase = new Database(sourcePath, {
+      fileMustExist: true,
+      readonly: true,
+    });
+    await sourceDatabase.backup(destinationPath);
+  } catch (error) {
+    throw new Error(
+      `Failed to back up SQLite baseline ${sourcePath}: ${error.message}`,
+      { cause: error },
+    );
+  } finally {
+    if (sourceDatabase && sourceDatabase.open) {
+      sourceDatabase.close();
+    }
+  }
+
+  if (!fs.existsSync(destinationPath)) {
+    throw new Error(
+      `SQLite backup reported success without creating ${destinationPath}`,
+    );
+  }
+  return true;
+}
+
+function seedFrontierTestFixtures(storeEnvironment) {
+  const seederPath = path.join(
+    REPO_ROOT,
+    "scripts",
+    "Tests",
+    "seed-frontier-test-fixture.js",
+  );
+  const result = spawnSync(process.execPath, [seederPath], {
+    cwd: REPO_ROOT,
+    env: {
+      ...process.env,
+      ...storeEnvironment,
+      EVEJS_TEST_FRONTIER_FIXTURES: "1",
+    },
+    stdio: "inherit",
+  });
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(
+      `Frontier test fixture seeder failed with exit code ${result.status}`,
+    );
+  }
 }
 
 /**
- * Create a disposable attested store. Returns { storeRoot, dataDir,
+ * Create a disposable attested store. Resolves to { storeRoot, dataDir,
  * attestationPath, baselineRoot, env, cleanup } where `env` holds the exact
  * variables the isolation guard checks and `cleanup()` removes the store.
+ * Set options.seedFrontierFixtures only for the Frontier suite; the seed is
+ * written to this disposable store, never its baseline.
  */
-function createIsolatedGameStore(options = {}) {
+async function createIsolatedGameStore(options = {}) {
   const baselineRoot = path.resolve(
     options.baselineRoot || resolveDefaultBaselineRoot(),
   );
@@ -86,53 +148,66 @@ function createIsolatedGameStore(options = {}) {
   );
   const dataDir = path.join(storeRoot, "data");
 
-  const baselineDataDir = path.join(baselineRoot, "data");
-  if (!cloneTree(baselineDataDir, dataDir)) {
-    fs.mkdirSync(dataDir, { recursive: true });
-  }
-  const baselineSqlite = path.join(baselineRoot, "gamestore.sqlite");
-  if (fs.existsSync(baselineSqlite)) {
-    cloneSqliteDatabase(baselineSqlite, path.join(storeRoot, "gamestore.sqlite"));
-  }
-  const baselineManifest = path.join(baselineRoot, "manifest.json");
-  if (fs.existsSync(baselineManifest)) {
-    cloneTree(baselineManifest, path.join(storeRoot, "manifest.json"));
-  }
+  try {
+    const baselineDataDir = path.join(baselineRoot, "data");
+    if (!cloneTree(baselineDataDir, dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+    const baselineSqlite = path.join(baselineRoot, "gamestore.sqlite");
+    if (fs.existsSync(baselineSqlite)) {
+      await cloneSqliteDatabase(
+        baselineSqlite,
+        path.join(storeRoot, "gamestore.sqlite"),
+      );
+    }
+    const baselineManifest = path.join(baselineRoot, "manifest.json");
+    if (fs.existsSync(baselineManifest)) {
+      cloneTree(baselineManifest, path.join(storeRoot, "manifest.json"));
+    }
 
-  const attestationPath = path.join(storeRoot, ATTESTATION_FILE);
-  fs.writeFileSync(
-    attestationPath,
-    `${JSON.stringify(
-      {
-        schemaVersion: 1,
-        kind: "evejs-test-store",
-        createdBy: "server/tests/helpers/isolatedGameStore.js",
-        createdAtMs: Date.now(),
-        storeRoot,
-        dataDir,
-        baselineRoot,
-      },
-      null,
-      2,
-    )}\n`,
-  );
+    const attestationPath = path.join(storeRoot, ATTESTATION_FILE);
+    fs.writeFileSync(
+      attestationPath,
+      `${JSON.stringify(
+        {
+          schemaVersion: 1,
+          kind: "evejs-test-store",
+          createdBy: "server/tests/helpers/isolatedGameStore.js",
+          createdAtMs: Date.now(),
+          storeRoot,
+          dataDir,
+          baselineRoot,
+        },
+        null,
+        2,
+      )}\n`,
+    );
 
-  return {
-    storeRoot,
-    dataDir,
-    attestationPath,
-    baselineRoot,
-    env: {
+    const environment = {
       EVEJS_TEST_STORE_ISOLATED: "1",
       EVEJS_TEST_STORE_ROOT: storeRoot,
       EVEJS_TEST_STORE_ATTESTATION: attestationPath,
       EVEJS_TEST_STORE_BASELINE_ROOT: baselineRoot,
       EVEJS_GAMESTORE_DATA_DIR: dataDir,
-    },
-    cleanup() {
-      fs.rmSync(storeRoot, { recursive: true, force: true });
-    },
-  };
+    };
+    if (options.seedFrontierFixtures === true) {
+      seedFrontierTestFixtures(environment);
+    }
+
+    return {
+      storeRoot,
+      dataDir,
+      attestationPath,
+      baselineRoot,
+      env: environment,
+      cleanup() {
+        fs.rmSync(storeRoot, { recursive: true, force: true });
+      },
+    };
+  } catch (error) {
+    fs.rmSync(storeRoot, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 /**
@@ -156,7 +231,9 @@ if (
 
 module.exports = {
   ATTESTATION_FILE,
+  cloneSqliteDatabase,
   createIsolatedGameStore,
   markTestProcessForIsolatedStore,
   resolveDefaultBaselineRoot,
+  seedFrontierTestFixtures,
 };

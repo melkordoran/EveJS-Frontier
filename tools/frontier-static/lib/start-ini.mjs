@@ -18,7 +18,7 @@ export function parseStartIni(text) {
     if (separator < 1) {
       continue;
     }
-    const key = line.slice(0, separator).trim();
+    const key = line.slice(0, separator).trim().toLowerCase();
     const value = line.slice(separator + 1).trim();
     values[section ? `${section}.${key}` : key] = value;
   }

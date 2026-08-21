@@ -15,7 +15,7 @@ import warnings
 import zipfile
 
 
-DEFAULT_CLIENT_BUILD = 3467658
+DEFAULT_CLIENT_BUILD = 3474408
 
 # These switches are deliberately narrow. Each one corresponds to a server
 # surface implemented and regression-tested by EveJS-Frontier. Do not turn the
@@ -36,6 +36,19 @@ MODULE_PATCHES = {
     ),
 }
 
+# Build 3474408 renamed the old REIGNMENT switch to RAIMENT and ships the
+# corrected switch enabled (False) already. Keep the legacy assignment set for
+# 3467658, while changing only the still-hidden implant surface in 3474408.
+BUILD_MODULE_PATCHES = {
+    3467658: MODULE_PATCHES,
+    3474408: {
+        "frontier/beta.pyc": MODULE_PATCHES["frontier/beta.pyc"],
+        "frontier/shell/common/const.pyc": (
+            "HIDE_SHELL_IMPLANT_SYSTEM",
+        ),
+    },
+}
+
 BUILD_PROFILES = {
     3467658: {
         "frontier/beta.pyc": {
@@ -49,6 +62,20 @@ BUILD_PROFILES = {
             "source_code_sha256": "a340924d86ae5ecc207e823ed1ee7db1cd4f8454c493ffa047b0fe90739cf9ae",
             "patched_member_sha256": "d1d72aae7b651969a29a6f70d8d9c4cc3c4a0d3399ee04a1f1f060008036c559",
             "patched_code_sha256": "d117e6d617d5dc83af9bc413cf9f3c1ed65123a0464f0b028d573138a0168b13",
+        },
+    },
+    3474408: {
+        "frontier/beta.pyc": {
+            "source_member_sha256": "3ada306336bbef391317ca0ab853d507f2b9bf9934f0eb0eaa1e17634303eb53",
+            "source_code_sha256": "5280137bf5d4a200b8da21524069605ae9faf8e6ebbcbd3c0ace46edd8e580ca",
+            "patched_member_sha256": "001e04e6d14aeb85e75f03896c84638a6292c8fa9b56f1870a48aaa4fe64c190",
+            "patched_code_sha256": "5d53d39d3d1ca156d124540d99c7c771b7ab331a215558bb36f612a48d078495",
+        },
+        "frontier/shell/common/const.pyc": {
+            "source_member_sha256": "6c4c6509534082170d5c05b193b1903f4656229f6b90edcbe0eb4edb4012fdfb",
+            "source_code_sha256": "e7a195fbc655411a1ee49abc37a44e0a8a30287cf621165d064de28622c6aa61",
+            "patched_member_sha256": "35188747970a852bbeaabdd4a5840a7be5beb2eb46d6dec8de1212610f9fa11c",
+            "patched_code_sha256": "d81eed85f3c888fe31025c1420a7f6fbf7bf7d23cee34d409a245a04f2eb0437",
         },
     },
 }
@@ -125,11 +152,21 @@ def resolve_build_profile(client_build):
     return profile
 
 
-def load_modules(archive_path):
+def resolve_module_patches(client_build):
+    module_patches = BUILD_MODULE_PATCHES.get(client_build)
+    if module_patches is None:
+        raise FeaturePatchError(
+            "No exact Frontier feature assignment profile is available for "
+            f"build {client_build}."
+        )
+    return module_patches
+
+
+def load_modules(archive_path, module_patches=MODULE_PATCHES):
     modules = {}
     try:
         with zipfile.ZipFile(archive_path, "r") as archive:
-            for module_name in MODULE_PATCHES:
+            for module_name in module_patches:
                 matches = [
                     entry for entry in archive.infolist()
                     if entry.filename == module_name
@@ -183,8 +220,14 @@ def find_assignments(code, names):
     return assignments
 
 
-def inspect_module_state(module_name, member, code, profile):
-    assignments = find_assignments(code, MODULE_PATCHES[module_name])
+def inspect_module_state(
+    module_name,
+    member,
+    code,
+    profile,
+    module_patches=MODULE_PATCHES,
+):
+    assignments = find_assignments(code, module_patches[module_name])
     values = {instruction.argval for instruction in assignments.values()}
     member_digest = sha256_bytes(member)
     code_digest = code_sha256(code)
@@ -207,13 +250,14 @@ def inspect_module_state(module_name, member, code, profile):
     )
 
 
-def inspect_states(modules, build_profile):
+def inspect_states(modules, build_profile, module_patches=MODULE_PATCHES):
     states = {
         module_name: inspect_module_state(
             module_name,
             member,
             code,
             build_profile[module_name],
+            module_patches,
         )
         for module_name, (member, code) in modules.items()
     }
@@ -225,8 +269,14 @@ def inspect_states(modules, build_profile):
     return "partial", states
 
 
-def build_patched_member(module_name, member, code, profile):
-    assignments = find_assignments(code, MODULE_PATCHES[module_name])
+def build_patched_member(
+    module_name,
+    member,
+    code,
+    profile,
+    module_patches=MODULE_PATCHES,
+):
+    assignments = find_assignments(code, module_patches[module_name])
     if any(instruction.argval is not True for instruction in assignments.values()):
         raise FeaturePatchError(f"{module_name} is not in the source-disabled state.")
 
@@ -288,7 +338,7 @@ def rewrite_archive(archive_path, patched_members):
                 + ", ".join(invalid)
             )
         shutil.copystat(archive_path, temporary_path)
-        with temporary_path.open("rb") as handle:
+        with temporary_path.open("r+b") as handle:
             os.fsync(handle.fileno())
         os.replace(temporary_path, archive_path)
     finally:
@@ -306,9 +356,10 @@ def main():
 
     require_python_312()
     build_profile = resolve_build_profile(args.build)
+    module_patches = resolve_module_patches(args.build)
     archive_path = args.archive.expanduser().resolve()
-    modules = load_modules(archive_path)
-    state, states = inspect_states(modules, build_profile)
+    modules = load_modules(archive_path, module_patches)
+    state, states = inspect_states(modules, build_profile, module_patches)
     if args.check:
         print(state)
         return 0
@@ -323,13 +374,15 @@ def main():
             member,
             code,
             build_profile[module_name],
+            module_patches,
         )
     if patched_members:
         rewrite_archive(archive_path, patched_members)
 
     patched_state, _patched_states = inspect_states(
-        load_modules(archive_path),
+        load_modules(archive_path, module_patches),
         build_profile,
+        module_patches,
     )
     if patched_state != "patched":
         raise FeaturePatchError("Frontier feature patch verification failed.")

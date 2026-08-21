@@ -3,6 +3,9 @@ const path = require("path");
 const BaseService = require(path.join(__dirname, "../baseService"));
 const log = require(path.join(__dirname, "../../utils/logger"));
 const {
+  throwWrappedObject,
+} = require(path.join(__dirname, "../../common/machoErrors"));
+const {
   buildCreationDiagnostic,
   buildCreationSnapshot,
   normalizePositiveInteger,
@@ -46,6 +49,19 @@ registerCreationChargeAbilityHandlers();
 registerIffAbilityHandlers();
 registerScanningAbilityHandlers();
 
+const CREATION_ERROR_CLASS = "frontier.creation.common.errors.CreationError";
+const CREATION_ERROR_GENERIC = "CreationError_Generic";
+const CREATION_ERROR_UNKNOWN = "CreationError_UnknownCreation";
+
+function throwCreationError(reason = CREATION_ERROR_GENERIC) {
+  const normalized = String(reason || CREATION_ERROR_GENERIC);
+  throwWrappedObject(
+    CREATION_ERROR_CLASS,
+    [normalized],
+    { msg: normalized },
+  );
+}
+
 /**
  * Marshalled kwargs arrive as a dict wrapper; ability handlers expect a
  * plain object keyed by the client's parameter names.
@@ -79,16 +95,28 @@ function resolveOwnedCreationItem(requestedItemID, session) {
 function resolveOwnedCreation(requestedItemID, session) {
   const owned = resolveOwnedCreationItem(requestedItemID, session);
   if (!owned) {
-    return null;
+    throwCreationError(CREATION_ERROR_UNKNOWN);
   }
 
   const ensured = ensureCreationState(owned.item, owned.characterID);
   if (!ensured.success) {
-    log.warn(
-      `[creation] get_creation failed ship=${owned.item.itemID} ` +
-      `type=${owned.item.typeID} reason=${ensured.errorMsg || "unknown"}`,
-    );
-    return null;
+    const expectedUnknown = [
+      "CREATION_ITEM_NOT_OWNED",
+      "CREATION_TEMPLATE_NOT_FOUND",
+    ].includes(String(ensured.errorMsg || ""));
+    const message =
+      `[creation] get_creation ${expectedUnknown ? "unknown" : "failed"} ` +
+      `ship=${owned.item.itemID} type=${owned.item.typeID} ` +
+      `reason=${ensured.errorMsg || "unknown"}`;
+    if (expectedUnknown) {
+      log.info(message);
+    } else {
+      log.warn(message);
+    }
+    if (expectedUnknown) {
+      throwCreationError(CREATION_ERROR_UNKNOWN);
+    }
+    throwCreationError(CREATION_ERROR_GENERIC);
   }
 
   if (ensured.data.seeded) {

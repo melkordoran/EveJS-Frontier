@@ -193,8 +193,19 @@ class ShellManagerService extends BaseService {
     return null;
   }
 
-  Handle_has_reignment() {
+  // Build 3474408 corrected the RPC spelling to `has_raiment`.  The client
+  // assigns this result directly to a Boolean controller property, while its
+  // OnRaimentImplanted path computes the same property with `id is not None`.
+  // The Boolean response shape is observed; false is EveJS's neutral policy
+  // while raiment inventory/implant progression remains unsupported, not a
+  // claim about CCP's production response.
+  Handle_has_raiment() {
     return false;
+  }
+
+  // Preserve the older Frontier spelling for clients that still call it.
+  Handle_has_reignment() {
+    return this.Handle_has_raiment();
   }
 
   Handle_set_active_shell_name(args, session) {
