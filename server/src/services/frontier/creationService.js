@@ -27,6 +27,12 @@ const {
   registerFallbackCreationAbilityHandlers,
 } = require(path.join(__dirname, "./creationAbilityHandlers"));
 const {
+  registerCreationChargeAbilityHandlers,
+} = require(path.join(__dirname, "./creationChargeAbilityHandlers"));
+const {
+  getCreationModuleChargeState,
+} = require(path.join(__dirname, "./creationChargeRuntime"));
+const {
   registerIffAbilityHandlers,
 } = require(path.join(__dirname, "./iffAbilityHandlers"));
 const {
@@ -36,6 +42,7 @@ const {
 // Behavior handlers must be registered before any get_creation snapshot is
 // built: module ability advertisement reads the handler registry.
 registerFallbackCreationAbilityHandlers();
+registerCreationChargeAbilityHandlers();
 registerIffAbilityHandlers();
 registerScanningAbilityHandlers();
 
@@ -97,6 +104,21 @@ function resolveOwnedCreation(requestedItemID, session) {
     owned.characterID,
     ensured.data.state,
     ensured.data.template,
+    {
+      getLoadedCharge(moduleItemID) {
+        const loaded = getCreationModuleChargeState(
+          owned.characterID,
+          moduleItemID,
+        );
+        if (!loaded.success || !loaded.data.item) {
+          return null;
+        }
+        return {
+          count: loaded.data.quantity,
+          typeID: loaded.data.item.typeID,
+        };
+      },
+    },
   );
 }
 
@@ -225,6 +247,7 @@ class CreationService extends BaseService {
       creationContext: {
         item: ensured.data.item,
         state: ensured.data.state,
+        template: ensured.data.template,
         characterID: owned.characterID,
       },
       moduleItemID,

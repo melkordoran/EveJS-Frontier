@@ -71,20 +71,36 @@ function buildCreationLayout(template) {
   return buildDict([["parts", buildDict(entries)]]);
 }
 
-function buildCreationModules(state) {
+function buildCreationModules(state, options = {}) {
+  const resolveLoadedCharge =
+    options && typeof options.getLoadedCharge === "function"
+      ? options.getLoadedCharge
+      : () => null;
   return buildDict(
     (Array.isArray(state && state.modules) ? state.modules : [])
-      .map((module) => [
-        normalizePositiveInteger(module && module.itemID),
-        buildDict([
-          ["item_id", normalizePositiveInteger(module && module.itemID)],
-          ["type_id", normalizePositiveInteger(module && module.typeID)],
-          ["abilities", buildList(
-            (Array.isArray(module && module.abilities) ? module.abilities : [])
-              .map((ability) => String(ability)),
-          )],
-        ]),
-      ])
+      .map((module) => {
+        const moduleItemID = normalizePositiveInteger(module && module.itemID);
+        const loaded = resolveLoadedCharge(moduleItemID) || null;
+        const loadedTypeID = normalizePositiveInteger(
+          loaded && (loaded.typeID ?? loaded.type_id),
+        ) || null;
+        const loadedCount = normalizePositiveInteger(
+          loaded && (loaded.quantity ?? loaded.count ?? loaded.loaded_count),
+        );
+        return [
+          moduleItemID,
+          buildDict([
+            ["item_id", normalizePositiveInteger(module && module.itemID)],
+            ["type_id", normalizePositiveInteger(module && module.typeID)],
+            ["abilities", buildList(
+              (Array.isArray(module && module.abilities) ? module.abilities : [])
+                .map((ability) => String(ability)),
+            )],
+            ["loaded_type_id", loadedTypeID],
+            ["loaded_count", loadedCount],
+          ]),
+        ];
+      })
       .filter(([itemID]) => itemID > 0)
       .sort((left, right) => left[0] - right[0]),
   );
@@ -131,14 +147,20 @@ function buildHardpoints(state) {
   );
 }
 
-function buildCreationSnapshot(item, characterID, state = null, template = null) {
+function buildCreationSnapshot(
+  item,
+  characterID,
+  state = null,
+  template = null,
+  options = {},
+) {
   return buildDict([
     ["item_id", item.itemID],
     ["type_id", item.typeID],
     ["owner_id", item.ownerID || characterID],
     ["access_control", buildDict([["default", "owner"]])],
     ["layout", state && template ? buildCreationLayout(template) : buildDict([])],
-    ["modules", state ? buildCreationModules(state) : buildDict([])],
+    ["modules", state ? buildCreationModules(state, options) : buildDict([])],
     ["interior_placements", state ? buildInteriorPlacements(state) : buildDict([])],
     ["hardpoints", state ? buildHardpoints(state) : buildList([])],
   ]);
