@@ -3374,8 +3374,12 @@ function buildCreatedItemNotificationPreviousState(
   };
 }
 
-function mergeItemStacks(sourceItemId, destinationItemId, quantity = null) {
-  ensureMigrated();
+function stageMergeItemStacks(
+  items,
+  sourceItemId,
+  destinationItemId,
+  quantity = null,
+) {
   const numericSourceItemID = toNumber(sourceItemId, 0);
   const numericDestinationItemID = toNumber(destinationItemId, 0);
   if (numericSourceItemID <= 0 || numericDestinationItemID <= 0) {
@@ -3385,7 +3389,6 @@ function mergeItemStacks(sourceItemId, destinationItemId, quantity = null) {
     };
   }
 
-  const items = readItems();
   const sourceItem = normalizeInventoryItem(items[String(numericSourceItemID)]);
   const destinationItem = normalizeInventoryItem(items[String(numericDestinationItemID)]);
   if (!sourceItem || !destinationItem) {
@@ -3485,19 +3488,44 @@ function mergeItemStacks(sourceItemId, destinationItemId, quantity = null) {
     });
   }
 
+  return {
+    success: true,
+    affectsFitting:
+      isFittingFlag(toNumber(sourceItem.flagID, 0)) ||
+      isFittingFlag(toNumber(destinationItem.flagID, 0)),
+    data: {
+      quantity: transferQuantity,
+      changes,
+    },
+  };
+}
+
+function mergeItemStacks(sourceItemId, destinationItemId, quantity = null) {
+  ensureMigrated();
+  const items = cloneValue(readItems());
+  const stageResult = stageMergeItemStacks(
+    items,
+    sourceItemId,
+    destinationItemId,
+    quantity,
+  );
+  if (!stageResult.success) {
+    return stageResult;
+  }
+  if (stageResult.affectsFitting) {
+    bumpDogmaInvalidationVersion();
+  }
+  const changes = stageResult.data.changes;
   if (!writeItems(items, { indexDelta: indexDeltaFromChanges(changes) })) {
     return {
       success: false,
       errorMsg: "WRITE_ERROR",
     };
   }
-
+  notifyInsuranceInventoryMutationChanges(changes, "mergeItemStacks");
   return {
     success: true,
-    data: {
-      quantity: transferQuantity,
-      changes,
-    },
+    data: stageResult.data,
   };
 }
 
@@ -3883,6 +3911,213 @@ function moveItemsToLocations(moveRequests) {
     data: {
       changes,
       moves,
+    },
+  };
+}
+
+/**
+ * Atomically consolidate one or more stack quantities into a single stack at
+ * a destination location/flag. When destinationItemID is omitted, the first
+ * source move creates (or becomes) the destination stack and every remaining
+ * source is merged into it on the same private item-table snapshot.
+ *
+ * This is intentionally stricter than moveItemsToLocations: every source must
+ * be a non-singleton stack, quantities are explicit positive safe integers,
+ * and the completed transaction always has exactly one destination stack.
+ */
+function moveItemStacksToLocation(
+  moveRequests,
+  destinationLocationId,
+  destinationFlagId,
+  options = {},
+) {
+  ensureMigrated();
+  const requests = Array.isArray(moveRequests) ? moveRequests : [];
+  const destinationLocationID = Number(destinationLocationId);
+  const destinationFlagID = Number(destinationFlagId);
+  const requestedDestinationItemID = Number(
+    options && options.destinationItemID,
+  ) || 0;
+  const preliminaryRequests = Array.isArray(options && options.preMoves)
+    ? options.preMoves
+    : [];
+  if (
+    requests.length === 0 ||
+    !Number.isSafeInteger(destinationLocationID) ||
+    destinationLocationID <= 0 ||
+    !Number.isSafeInteger(destinationFlagID) ||
+    destinationFlagID < 0 ||
+    (
+      requestedDestinationItemID !== 0 &&
+      (!Number.isSafeInteger(requestedDestinationItemID) ||
+        requestedDestinationItemID <= 0)
+    )
+  ) {
+    return { success: false, errorMsg: "INVALID_MOVE_REQUEST" };
+  }
+
+  const normalizedRequests = [];
+  const normalizedPreliminaryRequests = [];
+  const seenItemIDs = new Set();
+  for (const request of preliminaryRequests) {
+    const itemID = Number(request && request.itemID);
+    const preliminaryDestinationLocationID = Number(
+      request && request.destinationLocationID,
+    );
+    const preliminaryDestinationFlagID = Number(
+      request && request.destinationFlagID,
+    );
+    const quantity = Number(request && request.quantity);
+    if (
+      !Number.isSafeInteger(itemID) ||
+      itemID <= 0 ||
+      itemID === requestedDestinationItemID ||
+      seenItemIDs.has(itemID) ||
+      !Number.isSafeInteger(preliminaryDestinationLocationID) ||
+      preliminaryDestinationLocationID <= 0 ||
+      !Number.isSafeInteger(preliminaryDestinationFlagID) ||
+      preliminaryDestinationFlagID < 0 ||
+      !Number.isSafeInteger(quantity) ||
+      quantity <= 0
+    ) {
+      return { success: false, errorMsg: "INVALID_MOVE_REQUEST" };
+    }
+    seenItemIDs.add(itemID);
+    normalizedPreliminaryRequests.push({
+      destinationFlagID: preliminaryDestinationFlagID,
+      destinationLocationID: preliminaryDestinationLocationID,
+      itemID,
+      quantity,
+    });
+  }
+  for (const request of requests) {
+    const itemID = Number(request && request.itemID);
+    const quantity = Number(request && request.quantity);
+    if (
+      !Number.isSafeInteger(itemID) ||
+      itemID <= 0 ||
+      itemID === requestedDestinationItemID ||
+      seenItemIDs.has(itemID) ||
+      !Number.isSafeInteger(quantity) ||
+      quantity <= 0
+    ) {
+      return { success: false, errorMsg: "INVALID_MOVE_REQUEST" };
+    }
+    seenItemIDs.add(itemID);
+    normalizedRequests.push({ itemID, quantity });
+  }
+
+  const items = cloneValue(readItems());
+  const characters = readCharacters();
+  let destinationItemID = requestedDestinationItemID;
+  if (destinationItemID > 0) {
+    const destinationItem = normalizeInventoryItem(
+      items[String(destinationItemID)],
+    );
+    if (
+      !destinationItem ||
+      toNumber(destinationItem.singleton, 0) !== 0 ||
+      toNumber(destinationItem.locationID, 0) !== destinationLocationID ||
+      toNumber(destinationItem.flagID, -1) !== destinationFlagID
+    ) {
+      return { success: false, errorMsg: "INVALID_DESTINATION_STACK" };
+    }
+  }
+
+  const changes = [];
+  const moves = [];
+  const preliminaryMoves = [];
+  let affectsFitting = Boolean(
+    options && options.moveOptions && options.moveOptions.affectsFitting === true,
+  );
+  let totalQuantity = 0;
+  for (const request of normalizedPreliminaryRequests) {
+    const stageResult = stageItemMoveToLocation(
+      items,
+      characters,
+      request.itemID,
+      request.destinationLocationID,
+      request.destinationFlagID,
+      request.quantity,
+      options && options.moveOptions,
+    );
+    if (!stageResult.success) {
+      return stageResult;
+    }
+    if (toNumber(stageResult.data.quantity, 0) !== request.quantity) {
+      return { success: false, errorMsg: "MOVE_QUANTITY_MISMATCH" };
+    }
+    affectsFitting = affectsFitting || stageResult.affectsFitting === true;
+    changes.push(...(stageResult.data.changes || []));
+    preliminaryMoves.push(stageResult.data);
+  }
+  for (const request of normalizedRequests) {
+    const sourceItem = normalizeInventoryItem(items[String(request.itemID)]);
+    if (!sourceItem || toNumber(sourceItem.singleton, 0) !== 0) {
+      return { success: false, errorMsg: "STACK_REQUIRED" };
+    }
+
+    const stageResult = destinationItemID > 0
+      ? stageMergeItemStacks(
+          items,
+          request.itemID,
+          destinationItemID,
+          request.quantity,
+        )
+      : stageItemMoveToLocation(
+          items,
+          characters,
+          request.itemID,
+          destinationLocationID,
+          destinationFlagID,
+          request.quantity,
+          options && options.moveOptions,
+        );
+    if (!stageResult.success) {
+      return stageResult;
+    }
+    if (toNumber(stageResult.data.quantity, 0) !== request.quantity) {
+      return { success: false, errorMsg: "MOVE_QUANTITY_MISMATCH" };
+    }
+    if (destinationItemID <= 0) {
+      destinationItemID = toNumber(stageResult.data.movedItemID, 0);
+    }
+    affectsFitting = affectsFitting || stageResult.affectsFitting === true;
+    totalQuantity += toNumber(stageResult.data.quantity, 0);
+    changes.push(...(stageResult.data.changes || []));
+    moves.push(stageResult.data);
+  }
+
+  const destinationItem = normalizeInventoryItem(
+    items[String(destinationItemID)],
+  );
+  if (
+    !destinationItem ||
+    toNumber(destinationItem.locationID, 0) !== destinationLocationID ||
+    toNumber(destinationItem.flagID, -1) !== destinationFlagID
+  ) {
+    return { success: false, errorMsg: "INVALID_DESTINATION_STACK" };
+  }
+
+  if (affectsFitting) {
+    bumpDogmaInvalidationVersion();
+  }
+  if (!writeItems(items, { indexDelta: indexDeltaFromChanges(changes) })) {
+    return { success: false, errorMsg: "WRITE_ERROR" };
+  }
+  notifyInsuranceInventoryMutationChanges(
+    changes,
+    "moveItemStacksToLocation",
+  );
+  return {
+    success: true,
+    data: {
+      changes,
+      destinationItem: cloneValue(destinationItem),
+      destinationItemID,
+      moves,
+      preliminaryMoves,
+      quantity: totalQuantity,
     },
   };
 }
@@ -4779,6 +5014,7 @@ module.exports = {
   consumeInventoryItemQuantity,
   pruneExpiredSpaceItems,
   moveItemToLocation,
+  moveItemStacksToLocation,
   moveItemsToLocations,
   moveItemsAndSetShipPackagingState,
   transferItemToOwnerLocation,

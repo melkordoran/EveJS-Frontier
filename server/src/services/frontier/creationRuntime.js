@@ -22,6 +22,7 @@ const {
   buildEffectiveItemAttributeMap,
   getAttributeIDByNames,
   getPassiveModifierEffectRecords,
+  getModuleChargeGroupIDs,
   getTypeDogmaEffects,
 } = require(path.join(__dirname, "../fitting/liveFittingState"));
 const {
@@ -33,8 +34,11 @@ const {
   currentFileTime,
 } = require(path.join(__dirname, "../_shared/serviceHelpers"));
 const {
+  ABILITY_RELOAD,
+  ABILITY_UNLOAD,
   getModuleBehaviorName,
   getRegisteredBehaviorAbilities,
+  resolveCreationAbilityHandler,
 } = require(path.join(__dirname, "./creationAbilityRuntime"));
 
 const CREATION_STATE_KEY = "evejsFrontierCreation";
@@ -118,6 +122,26 @@ function getCreationModuleAbilities(typeID, options = {}) {
   for (const ability of resolveBehaviorAbilities(resolveBehaviorName(numericTypeID))) {
     if (!abilities.includes(ability)) {
       abilities.push(ability);
+    }
+  }
+  const resolveChargeGroups =
+    typeof options.getModuleChargeGroupIDs === "function"
+      ? options.getModuleChargeGroupIDs
+      : getModuleChargeGroupIDs;
+  const resolveAbilityHandler =
+    typeof options.resolveCreationAbilityHandler === "function"
+      ? options.resolveCreationAbilityHandler
+      : resolveCreationAbilityHandler;
+  const chargeGroups = resolveChargeGroups(numericTypeID);
+  if (chargeGroups && Number(chargeGroups.size) > 0) {
+    const behaviorName = resolveBehaviorName(numericTypeID);
+    for (const ability of [ABILITY_RELOAD, ABILITY_UNLOAD]) {
+      if (
+        !abilities.includes(ability) &&
+        resolveAbilityHandler(behaviorName, ability)
+      ) {
+        abilities.push(ability);
+      }
     }
   }
   return abilities;

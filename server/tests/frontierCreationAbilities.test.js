@@ -2,7 +2,7 @@
 
 /**
  * Frontier Creation ability framework, IFF transponder/beacon, and
- * directional scanner coverage (client build 3455996).
+ * directional scanner coverage (client build 3467658).
  * Run through: npm run test:frontier-server (isolated runner).
  */
 
@@ -12,6 +12,10 @@ const test = require("node:test");
 const {
   marshalEncode,
 } = require("../src/network/tcp/utils/marshal");
+const {
+  currentFileTime,
+  unwrapMarshalValue,
+} = require("../src/services/_shared/serviceHelpers");
 const creationRuntime = require("../src/services/frontier/creationRuntime");
 const creationAbilityRuntime = require("../src/services/frontier/creationAbilityRuntime");
 const {
@@ -25,6 +29,7 @@ const itemStore = require("../src/services/inventory/itemStore");
 const liveFittingState = require("../src/services/fitting/liveFittingState");
 const frontierSpaceRuntime = require("../src/space/runtime");
 const DogmaService = require("../src/services/dogma/dogmaService");
+const CreationService = require("../src/services/frontier/creationService");
 const {
   buildPythonTimedeltaPayload,
   buildScanResponse,
@@ -33,14 +38,21 @@ const {
 const {
   buildVerdictsForViewer,
 } = require("../src/services/frontier/iffAbilityHandlers");
-// Requiring the service registers every behavior handler.
-require("../src/services/frontier/creationService");
-
 const TYPE_SCANNER = 95322;
 const TYPE_TRANSPONDER = 95988;
 const TYPE_BEACON = 96039;
 const TYPE_FUEL_BAY = 95324;
 const TYPE_CAPACITOR = 95325;
+const TYPE_CUTTING_LASER = 95317;
+const TYPE_RECYCLED_MINING_LENS = 83463;
+const TYPE_SYNTHETIC_MINING_LENS = 95639;
+const TYPE_STUTTERGUN = 95753;
+const TYPE_PYRO_ROUND = 82126;
+const TYPE_LAUNCH_BAY = 95811;
+const TYPE_FIELD_CAIRN = 93141;
+const TYPE_WRONG_GROUP_CHARGE = 82126;
+const TYPE_REFUGE_CREATION = 95735;
+const CREATION_MODULE_CHARGE_FLAG_ID = 184;
 // A real signature-bearing type from spaceComponentsByType (baseSignature 2.0).
 const TYPE_SIGNATURE_TARGET = 23;
 
@@ -83,8 +95,28 @@ test("existing online/offline advertisement is unchanged for generic modules", (
   );
 });
 
+test("Creation charge abilities are advertised only for charge-capable modules", () => {
+  assert.deepEqual(
+    creationRuntime.getCreationModuleAbilities(TYPE_CUTTING_LASER),
+    ["online", "offline", "reload", "unload"],
+  );
+  assert.equal(
+    creationRuntime.getCreationModuleAbilities(TYPE_FUEL_BAY).includes("reload"),
+    false,
+  );
+  assert.equal(
+    creationRuntime.getCreationModuleAbilities(TYPE_FUEL_BAY).includes("unload"),
+    false,
+  );
+});
+
 test("no ability is advertised without a registered handler", () => {
-  for (const typeID of [TYPE_SCANNER, TYPE_TRANSPONDER, TYPE_BEACON]) {
+  for (const typeID of [
+    TYPE_SCANNER,
+    TYPE_TRANSPONDER,
+    TYPE_BEACON,
+    TYPE_CUTTING_LASER,
+  ]) {
     const behaviorName = creationAbilityRuntime.getModuleBehaviorName(typeID);
     for (const ability of creationRuntime.getCreationModuleAbilities(typeID)) {
       assert.ok(
@@ -108,6 +140,557 @@ function buildDispatchContext(moduleTypeID, moduleItemID = 500001) {
     },
   };
 }
+
+function buildCreationChargeFixture() {
+  const shipGrant = itemStore.grantItemToCharacterLocation(
+    OWNER_ID,
+    SOLAR_SYSTEM_ID,
+    0,
+    TYPE_REFUGE_CREATION,
+    1,
+    { individualItems: true, singleton: 1 },
+  );
+  assert.equal(shipGrant.success, true, shipGrant.errorMsg);
+  const grantedShip = shipGrant.data.items[0];
+  const shipUpdate = itemStore.updateInventoryItem(
+    grantedShip.itemID,
+    (currentItem) => ({
+      ...currentItem,
+      locationID: SOLAR_SYSTEM_ID,
+      flagID: 0,
+      spaceState: {
+        systemID: SOLAR_SYSTEM_ID,
+        position: { x: 0, y: 0, z: 0 },
+      },
+    }),
+  );
+  assert.equal(shipUpdate.success, true, shipUpdate.errorMsg);
+
+  const ensured = creationRuntime.ensureCreationState(shipUpdate.data, OWNER_ID);
+  assert.equal(ensured.success, true, ensured.errorMsg);
+  const moduleState = ensured.data.state.modules.find(
+    (module) => Number(module && module.typeID) === TYPE_CUTTING_LASER,
+  );
+  assert.ok(moduleState, "Refuge Creation should contain one Cutting Laser");
+  const moduleItem = itemStore.findItemById(moduleState.itemID);
+  assert.ok(moduleItem, "seeded Cutting Laser inventory item should exist");
+
+  const notifications = [];
+  const session = {
+    charid: OWNER_ID,
+    characterID: OWNER_ID,
+    shipid: grantedShip.itemID,
+    shipID: grantedShip.itemID,
+    solarsystemid: SOLAR_SYSTEM_ID,
+    solarsystemid2: SOLAR_SYSTEM_ID,
+    compatibilityProfile: "frontier",
+    _space: {
+      systemID: SOLAR_SYSTEM_ID,
+      simFileTime: currentFileTime(),
+    },
+    sendNotification(name, idType, payload) {
+      notifications.push({ name, idType, payload });
+    },
+  };
+
+  return {
+    moduleItem,
+    notifications,
+    service: new CreationService(),
+    session,
+    ship: itemStore.findShipItemById(grantedShip.itemID),
+  };
+}
+
+function grantCreationCargoCharge(ownerID, shipID, typeID) {
+  const grant = itemStore.grantItemToCharacterLocation(
+    ownerID,
+    shipID,
+    itemStore.ITEM_FLAGS.CARGO_HOLD,
+    typeID,
+    1,
+    { singleton: 0 },
+  );
+  assert.equal(grant.success, true, grant.errorMsg);
+  return grant.data.items[0];
+}
+
+function addCreationModuleToFixture(fixture, typeID) {
+  const grant = itemStore.grantItemToCharacterLocation(
+    OWNER_ID,
+    fixture.ship.itemID,
+    creationRuntime.CREATION_FITTING_FLAG_ID,
+    typeID,
+    1,
+    { individualItems: true, singleton: 1 },
+  );
+  assert.equal(grant.success, true, grant.errorMsg);
+  const moduleItem = grant.data.items[0];
+  const shipUpdate = itemStore.updateShipItem(
+    fixture.ship.itemID,
+    (currentItem) => {
+      const customInfo = JSON.parse(currentItem.customInfo || "{}");
+      const state = customInfo[creationRuntime.CREATION_STATE_KEY];
+      assert.ok(state, "Creation state should already be seeded");
+      state.modules.push({ itemID: moduleItem.itemID, typeID });
+      return { ...currentItem, customInfo: JSON.stringify(customInfo) };
+    },
+  );
+  assert.equal(shipUpdate.success, true, shipUpdate.errorMsg);
+  return moduleItem;
+}
+
+function assertCreationChangedNotification(
+  notification,
+  creationID,
+  freshSnapshot,
+  moduleItemID,
+  expectedLoadedTypeID,
+  expectedLoadedCount,
+) {
+  assert.equal(notification.name, "OnCreationChanged");
+  assert.equal(notification.idType, "clientID");
+  assert.ok(Array.isArray(notification.payload));
+  assert.equal(notification.payload.length, 2);
+  assert.equal(notification.payload[0], creationID);
+
+  const notifiedSnapshot = unwrapMarshalValue(notification.payload[1]);
+  assert.deepEqual(Object.keys(notifiedSnapshot).sort(), [
+    "access_control",
+    "hardpoints",
+    "interior_placements",
+    "item_id",
+    "layout",
+    "modules",
+    "owner_id",
+    "type_id",
+  ]);
+  assert.equal(notifiedSnapshot.item_id, freshSnapshot.item_id);
+  assert.equal(notifiedSnapshot.type_id, freshSnapshot.type_id);
+  assert.equal(notifiedSnapshot.owner_id, freshSnapshot.owner_id);
+  assert.equal(
+    notifiedSnapshot.access_control.default,
+    freshSnapshot.access_control.default,
+  );
+  assert.deepEqual(
+    Object.keys(notifiedSnapshot.layout.parts).sort(),
+    Object.keys(freshSnapshot.layout.parts).sort(),
+  );
+  assert.deepEqual(
+    Object.keys(notifiedSnapshot.modules).sort(),
+    Object.keys(freshSnapshot.modules).sort(),
+  );
+  assert.deepEqual(
+    Object.keys(notifiedSnapshot.interior_placements).sort(),
+    Object.keys(freshSnapshot.interior_placements).sort(),
+  );
+  assert.equal(
+    notifiedSnapshot.hardpoints.length,
+    freshSnapshot.hardpoints.length,
+  );
+
+  const notifiedModule = notifiedSnapshot.modules[String(moduleItemID)];
+  assert.equal(notifiedModule.loaded_type_id, expectedLoadedTypeID);
+  assert.equal(notifiedModule.loaded_count, expectedLoadedCount);
+  assert.equal(
+    notifiedModule.loaded_type_id,
+    freshSnapshot.modules[String(moduleItemID)].loaded_type_id,
+  );
+  assert.equal(
+    notifiedModule.loaded_count,
+    freshSnapshot.modules[String(moduleItemID)].loaded_count,
+  );
+}
+
+test("Creation reload and unload move one mining lens through module charge flag 184", () => {
+  const fixture = buildCreationChargeFixture();
+  const sourceCharge = grantCreationCargoCharge(
+    OWNER_ID,
+    fixture.ship.itemID,
+    TYPE_RECYCLED_MINING_LENS,
+  );
+  const beforeReload = currentFileTime();
+  const reloadResult = fixture.service.Handle_activate_ability(
+    [fixture.ship.itemID, fixture.moduleItem.itemID, "reload"],
+    fixture.session,
+    {
+      type_id: TYPE_RECYCLED_MINING_LENS,
+      ammo_item_ids: [sourceCharge.itemID],
+      ammo_location_id: fixture.ship.itemID,
+    },
+  );
+  const reloadPayload = unwrapMarshalValue(reloadResult);
+
+  assert.equal(typeof reloadPayload.server_time, "bigint");
+  assert.ok(reloadPayload.server_time > beforeReload);
+  assert.equal(reloadPayload.type_id, TYPE_RECYCLED_MINING_LENS);
+  assert.equal(reloadPayload.qty, 1);
+
+  const loadedCharges = itemStore.listContainerItems(
+    OWNER_ID,
+    fixture.moduleItem.itemID,
+    CREATION_MODULE_CHARGE_FLAG_ID,
+  );
+  assert.equal(loadedCharges.length, 1);
+  assert.equal(loadedCharges[0].itemID, sourceCharge.itemID);
+  assert.equal(loadedCharges[0].locationID, fixture.moduleItem.itemID);
+  assert.equal(loadedCharges[0].flagID, CREATION_MODULE_CHARGE_FLAG_ID);
+  assert.equal(loadedCharges[0].typeID, TYPE_RECYCLED_MINING_LENS);
+  assert.equal(loadedCharges[0].stacksize, 1);
+  const creationSnapshot = unwrapMarshalValue(
+    fixture.service.Handle_get_creation([fixture.ship.itemID], fixture.session),
+  );
+  assert.equal(
+    creationSnapshot.modules[String(fixture.moduleItem.itemID)].loaded_type_id,
+    TYPE_RECYCLED_MINING_LENS,
+  );
+  assert.equal(
+    creationSnapshot.modules[String(fixture.moduleItem.itemID)].loaded_count,
+    1,
+  );
+  const reloadCreationNotifications = fixture.notifications.filter(
+    (notification) => notification.name === "OnCreationChanged",
+  );
+  assert.equal(reloadCreationNotifications.length, 1);
+  assertCreationChangedNotification(
+    reloadCreationNotifications[0],
+    fixture.ship.itemID,
+    creationSnapshot,
+    fixture.moduleItem.itemID,
+    TYPE_RECYCLED_MINING_LENS,
+    1,
+  );
+  assert.ok(
+    fixture.notifications.some((notification) => notification.name === "OnItemChange"),
+    "reload should synchronize its real nested inventory row",
+  );
+  assert.ok(
+    fixture.notifications.some(
+      (notification) => notification.name === "OnGodmaPrimeItem",
+    ),
+    "in-space reload should prime the nested charge for Dogma",
+  );
+
+  const unloadResult = fixture.service.Handle_activate_ability(
+    [fixture.ship.itemID, fixture.moduleItem.itemID, "unload"],
+    fixture.session,
+    {},
+  );
+  const unloadPayload = unwrapMarshalValue(unloadResult);
+  assert.equal(typeof unloadPayload.server_time, "bigint");
+
+  const returnedCharge = itemStore.findItemById(sourceCharge.itemID);
+  assert.equal(returnedCharge.locationID, fixture.ship.itemID);
+  assert.equal(returnedCharge.flagID, itemStore.ITEM_FLAGS.CARGO_HOLD);
+  assert.equal(
+    itemStore.listContainerItems(
+      OWNER_ID,
+      fixture.moduleItem.itemID,
+      CREATION_MODULE_CHARGE_FLAG_ID,
+    ).length,
+    0,
+  );
+  const unloadedCreationSnapshot = unwrapMarshalValue(
+    fixture.service.Handle_get_creation([fixture.ship.itemID], fixture.session),
+  );
+  assert.equal(
+    unloadedCreationSnapshot.modules[String(fixture.moduleItem.itemID)].loaded_type_id,
+    null,
+  );
+  assert.equal(
+    unloadedCreationSnapshot.modules[String(fixture.moduleItem.itemID)].loaded_count,
+    0,
+  );
+  const unloadCreationNotifications = fixture.notifications.filter(
+    (notification) => notification.name === "OnCreationChanged",
+  );
+  assert.equal(unloadCreationNotifications.length, 2);
+  assertCreationChangedNotification(
+    unloadCreationNotifications[1],
+    fixture.ship.itemID,
+    unloadedCreationSnapshot,
+    fixture.moduleItem.itemID,
+    null,
+    0,
+  );
+});
+
+test("Creation Launch Bay reloads and unloads a deployable payload through flag 184", () => {
+  const fixture = buildCreationChargeFixture();
+  const launchBay = addCreationModuleToFixture(fixture, TYPE_LAUNCH_BAY);
+  assert.deepEqual(
+    creationRuntime.getCreationModuleAbilities(TYPE_LAUNCH_BAY),
+    ["online", "offline", "reload", "unload"],
+  );
+  const fieldCairn = grantCreationCargoCharge(
+    OWNER_ID,
+    fixture.ship.itemID,
+    TYPE_FIELD_CAIRN,
+  );
+  assert.equal(itemStore.findItemById(fieldCairn.itemID).categoryID, 22);
+
+  const reloadResult = fixture.service.Handle_activate_ability(
+    [fixture.ship.itemID, launchBay.itemID, "reload"],
+    fixture.session,
+    {
+      type_id: TYPE_FIELD_CAIRN,
+      ammo_item_ids: [fieldCairn.itemID],
+      ammo_location_id: fixture.ship.itemID,
+    },
+  );
+  const reloadPayload = unwrapMarshalValue(reloadResult);
+  assert.equal(reloadPayload.type_id, TYPE_FIELD_CAIRN);
+  assert.equal(reloadPayload.qty, 1);
+
+  const loadedPayloads = itemStore.listContainerItems(
+    OWNER_ID,
+    launchBay.itemID,
+    CREATION_MODULE_CHARGE_FLAG_ID,
+  );
+  assert.equal(loadedPayloads.length, 1);
+  assert.equal(loadedPayloads[0].itemID, fieldCairn.itemID);
+  assert.equal(loadedPayloads[0].typeID, TYPE_FIELD_CAIRN);
+  assert.equal(loadedPayloads[0].categoryID, 22);
+  assert.equal(loadedPayloads[0].locationID, launchBay.itemID);
+  assert.equal(loadedPayloads[0].flagID, CREATION_MODULE_CHARGE_FLAG_ID);
+
+  const loadedSnapshot = unwrapMarshalValue(
+    fixture.service.Handle_get_creation([fixture.ship.itemID], fixture.session),
+  );
+  assert.equal(
+    loadedSnapshot.modules[String(launchBay.itemID)].loaded_type_id,
+    TYPE_FIELD_CAIRN,
+  );
+  assert.equal(
+    loadedSnapshot.modules[String(launchBay.itemID)].loaded_count,
+    1,
+  );
+
+  const unloadResult = fixture.service.Handle_activate_ability(
+    [fixture.ship.itemID, launchBay.itemID, "unload"],
+    fixture.session,
+    {},
+  );
+  assert.equal(typeof unwrapMarshalValue(unloadResult).server_time, "bigint");
+  const returnedPayload = itemStore.findItemById(fieldCairn.itemID);
+  assert.equal(returnedPayload.locationID, fixture.ship.itemID);
+  assert.equal(returnedPayload.flagID, itemStore.ITEM_FLAGS.CARGO_HOLD);
+  assert.equal(
+    itemStore.listContainerItems(
+      OWNER_ID,
+      launchBay.itemID,
+      CREATION_MODULE_CHARGE_FLAG_ID,
+    ).length,
+    0,
+  );
+
+  const unloadedSnapshot = unwrapMarshalValue(
+    fixture.service.Handle_get_creation([fixture.ship.itemID], fixture.session),
+  );
+  assert.equal(
+    unloadedSnapshot.modules[String(launchBay.itemID)].loaded_type_id,
+    null,
+  );
+  assert.equal(
+    unloadedSnapshot.modules[String(launchBay.itemID)].loaded_count,
+    0,
+  );
+});
+
+test("Creation reload and unload remain successful when post-commit notifications throw", () => {
+  const fixture = buildCreationChargeFixture();
+  let notificationAttempts = 0;
+  fixture.session.sendNotification = () => {
+    notificationAttempts += 1;
+    throw new Error("synthetic notification transport failure");
+  };
+  const sourceCharge = grantCreationCargoCharge(
+    OWNER_ID,
+    fixture.ship.itemID,
+    TYPE_RECYCLED_MINING_LENS,
+  );
+
+  const reloadResult = fixture.service.Handle_activate_ability(
+    [fixture.ship.itemID, fixture.moduleItem.itemID, "reload"],
+    fixture.session,
+    {
+      type_id: TYPE_RECYCLED_MINING_LENS,
+      ammo_item_ids: [sourceCharge.itemID],
+      ammo_location_id: fixture.ship.itemID,
+    },
+  );
+  const reloadPayload = unwrapMarshalValue(reloadResult);
+  assert.equal(reloadPayload.type_id, TYPE_RECYCLED_MINING_LENS);
+  assert.equal(reloadPayload.qty, 1);
+  const persistedLoadedCharge = itemStore.findItemById(sourceCharge.itemID);
+  assert.equal(persistedLoadedCharge.locationID, fixture.moduleItem.itemID);
+  assert.equal(persistedLoadedCharge.flagID, CREATION_MODULE_CHARGE_FLAG_ID);
+
+  const unloadResult = fixture.service.Handle_activate_ability(
+    [fixture.ship.itemID, fixture.moduleItem.itemID, "unload"],
+    fixture.session,
+    {},
+  );
+  const unloadPayload = unwrapMarshalValue(unloadResult);
+  assert.equal(typeof unloadPayload.server_time, "bigint");
+  const persistedReturnedCharge = itemStore.findItemById(sourceCharge.itemID);
+  assert.equal(persistedReturnedCharge.locationID, fixture.ship.itemID);
+  assert.equal(persistedReturnedCharge.flagID, itemStore.ITEM_FLAGS.CARGO_HOLD);
+  assert.ok(notificationAttempts >= 2);
+});
+
+test("Creation reload atomically replaces a loaded mining lens with another compatible type", () => {
+  const fixture = buildCreationChargeFixture();
+  const recycledLens = grantCreationCargoCharge(
+    OWNER_ID,
+    fixture.ship.itemID,
+    TYPE_RECYCLED_MINING_LENS,
+  );
+  const firstReloadResult = fixture.service.Handle_activate_ability(
+    [fixture.ship.itemID, fixture.moduleItem.itemID, "reload"],
+    fixture.session,
+    {
+      type_id: TYPE_RECYCLED_MINING_LENS,
+      ammo_item_ids: [recycledLens.itemID],
+      ammo_location_id: fixture.ship.itemID,
+    },
+  );
+  assert.equal(unwrapMarshalValue(firstReloadResult).qty, 1);
+
+  const syntheticLens = grantCreationCargoCharge(
+    OWNER_ID,
+    fixture.ship.itemID,
+    TYPE_SYNTHETIC_MINING_LENS,
+  );
+  const replacementResult = fixture.service.Handle_activate_ability(
+    [fixture.ship.itemID, fixture.moduleItem.itemID, "reload"],
+    fixture.session,
+    {
+      type_id: TYPE_SYNTHETIC_MINING_LENS,
+      ammo_item_ids: [syntheticLens.itemID],
+      ammo_location_id: fixture.ship.itemID,
+    },
+  );
+  const replacementPayload = unwrapMarshalValue(replacementResult);
+
+  assert.equal(replacementPayload.type_id, TYPE_SYNTHETIC_MINING_LENS);
+  assert.equal(replacementPayload.qty, 1);
+  const loadedCharges = itemStore.listContainerItems(
+    OWNER_ID,
+    fixture.moduleItem.itemID,
+    CREATION_MODULE_CHARGE_FLAG_ID,
+  );
+  assert.equal(loadedCharges.length, 1);
+  assert.equal(loadedCharges[0].itemID, syntheticLens.itemID);
+  assert.equal(loadedCharges[0].typeID, TYPE_SYNTHETIC_MINING_LENS);
+
+  const returnedRecycledLens = itemStore.findItemById(recycledLens.itemID);
+  assert.equal(returnedRecycledLens.locationID, fixture.ship.itemID);
+  assert.equal(returnedRecycledLens.flagID, itemStore.ITEM_FLAGS.CARGO_HOLD);
+});
+
+test("Creation reload atomically consolidates fragmented charge stacks", () => {
+  const fixture = buildCreationChargeFixture();
+  const stuttergun = addCreationModuleToFixture(fixture, TYPE_STUTTERGUN);
+  const ammoGrant = itemStore.grantItemToCharacterLocation(
+    OWNER_ID,
+    fixture.ship.itemID,
+    itemStore.ITEM_FLAGS.CARGO_HOLD,
+    TYPE_PYRO_ROUND,
+    80,
+    { singleton: 0 },
+  );
+  assert.equal(ammoGrant.success, true, ammoGrant.errorMsg);
+  const sourceStack = ammoGrant.data.items[0];
+  const split = itemStore.moveItemToLocation(
+    sourceStack.itemID,
+    fixture.ship.itemID,
+    itemStore.ITEM_FLAGS.CARGO_HOLD,
+    40,
+  );
+  assert.equal(split.success, true, split.errorMsg);
+  assert.equal(
+    liveFittingState.getModuleChargeCapacity(TYPE_STUTTERGUN, TYPE_PYRO_ROUND),
+    80,
+  );
+  assert.deepEqual(
+    [sourceStack.itemID, split.data.movedItemID]
+      .map((itemID) => itemStore.findItemById(itemID).stacksize),
+    [40, 40],
+  );
+
+  const reloadResult = fixture.service.Handle_activate_ability(
+    [fixture.ship.itemID, stuttergun.itemID, "reload"],
+    fixture.session,
+    {
+      type_id: TYPE_PYRO_ROUND,
+      ammo_item_ids: [sourceStack.itemID, split.data.movedItemID],
+      ammo_location_id: fixture.ship.itemID,
+    },
+  );
+  const reloadPayload = unwrapMarshalValue(reloadResult);
+  assert.equal(reloadPayload.type_id, TYPE_PYRO_ROUND);
+  assert.equal(reloadPayload.qty, 80);
+
+  const loadedCharges = itemStore.listContainerItems(
+    OWNER_ID,
+    stuttergun.itemID,
+    CREATION_MODULE_CHARGE_FLAG_ID,
+  );
+  assert.equal(loadedCharges.length, 1);
+  assert.equal(loadedCharges[0].typeID, TYPE_PYRO_ROUND);
+  assert.equal(loadedCharges[0].stacksize, 80);
+});
+
+test("Creation reload rejects spoofed and wrong-group charge sources without mutation", () => {
+  const fixture = buildCreationChargeFixture();
+  const foreignCharge = grantCreationCargoCharge(
+    OTHER_OWNER_ID,
+    fixture.ship.itemID,
+    TYPE_RECYCLED_MINING_LENS,
+  );
+  const foreignBefore = itemStore.findItemById(foreignCharge.itemID);
+  const spoofedResult = fixture.service.Handle_activate_ability(
+    [fixture.ship.itemID, fixture.moduleItem.itemID, "reload"],
+    fixture.session,
+    {
+      type_id: TYPE_RECYCLED_MINING_LENS,
+      ammo_item_ids: [foreignCharge.itemID],
+      ammo_location_id: fixture.ship.itemID,
+    },
+  );
+  assert.equal(spoofedResult, false);
+  assert.deepEqual(itemStore.findItemById(foreignCharge.itemID), foreignBefore);
+
+  const wrongGroupCharge = grantCreationCargoCharge(
+    OWNER_ID,
+    fixture.ship.itemID,
+    TYPE_WRONG_GROUP_CHARGE,
+  );
+  const wrongGroupBefore = itemStore.findItemById(wrongGroupCharge.itemID);
+  const wrongGroupResult = fixture.service.Handle_activate_ability(
+    [fixture.ship.itemID, fixture.moduleItem.itemID, "reload"],
+    fixture.session,
+    {
+      type_id: TYPE_WRONG_GROUP_CHARGE,
+      ammo_item_ids: [wrongGroupCharge.itemID],
+      ammo_location_id: fixture.ship.itemID,
+    },
+  );
+  assert.equal(wrongGroupResult, false);
+  assert.deepEqual(
+    itemStore.findItemById(wrongGroupCharge.itemID),
+    wrongGroupBefore,
+  );
+  assert.equal(
+    itemStore.listContainerItems(
+      OWNER_ID,
+      fixture.moduleItem.itemID,
+      CREATION_MODULE_CHARGE_FLAG_ID,
+    ).length,
+    0,
+  );
+});
 
 function buildIffEffectRuntime(shipID) {
   const entity = {

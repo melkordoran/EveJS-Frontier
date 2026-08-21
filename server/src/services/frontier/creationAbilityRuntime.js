@@ -3,7 +3,7 @@
 /**
  * Behavior-aware Creation module ability registry and dispatch.
  *
- * Client contract (build 3455996 bytecode):
+ * Client contract (build 3467658 bytecode):
  * - `creation.activate_ability(creation_id, module_item_id, str(ability_id),
  *   **params)` — ability parameters arrive as keyword arguments.
  * - AbilityId values are strings ("online", "offline", "activate_effect",
@@ -33,6 +33,8 @@ const ABILITY_DEACTIVATE_EFFECT = "deactivate_effect";
 const ABILITY_DIRECTIONAL_SCAN = "directional_scan";
 const ABILITY_IFF_RECONFIGURE = "iff_reconfigure";
 const ABILITY_DEPLOY = "deploy";
+const ABILITY_RELOAD = "reload";
+const ABILITY_UNLOAD = "unload";
 
 // (behaviorName -> Map(abilityId -> handler)). Fallback handlers (online/
 // offline) live under the "*" behavior key and apply to every module whose
@@ -136,6 +138,8 @@ function dispatchCreationAbility({
     ability: normalizedAbility,
     behaviorName,
     creationItem: creationContext.item,
+    creationState: creationContext.state,
+    creationTemplate: creationContext.template || null,
     characterID: creationContext.characterID,
     moduleEntry,
     moduleItemID: toInt(moduleItemID, 0),
@@ -177,6 +181,8 @@ module.exports = {
   ABILITY_IFF_RECONFIGURE,
   ABILITY_OFFLINE,
   ABILITY_ONLINE,
+  ABILITY_RELOAD,
+  ABILITY_UNLOAD,
   dispatchCreationAbility,
   getModuleBehaviorName,
   getRegisteredBehaviorAbilities,
